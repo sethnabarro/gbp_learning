@@ -1,0 +1,7 @@
+ipython==8.8.0
+jupyter==1.0.0
+matplotlib==3.5.2
+numpy==1.23.5
+scipy==1.8.1
+tensorflow==2.11.0
+tensorflow-datasets==4.8.1
