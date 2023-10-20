@@ -18,8 +18,8 @@ do
   seed1=$RANDOM
   seed2=$RANDOM
   seed3=$RANDOM
-  logdir="${repo_dir}/experiments/mnist/standard_mnist/"
-  mkdir -p "${logdir}/async/"
+  logdir="${repo_dir}/experiments/mnist/standard_mnist/async/"
+  mkdir -p "${logdir}"
   cmd="CUDA_VISIBLE_DEVICES='${gpus}' TF_GPU_ALLOCATOR=cuda_malloc_async XLA_FLAGS=--xla_gpu_cuda_data_dir=/rds/general/user/sdn09/home/anaconda3/pkgs/cuda-nvcc-12.2.140-0 PYTHONPATH=${PYTHONPATH}:$repo_dir:$repo_dir/experiments/mnist/ $python_exec $repo_dir/experiments/mnist/run.py
     --batchsize-train=200
     --batchsize-test=200

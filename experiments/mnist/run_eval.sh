@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Evaluates a checkpoint from a trained model
-N_REPEATS=10
+N_REPEATS=1
 ENV_DIR="/home/$(whoami)/envs/anon_gbp_env/"
-RESDIR="/home/$(whoami)/code/gbp_learning/experiments/mnist/results/standard_mnist/ff_cnn_non_asynch/8"
+RESDIR="/home/$(whoami)/code/gbp_learning/experiments/mnist/results/standard_mnist/async/8"
 
 scriptdir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 echo $scriptdir
