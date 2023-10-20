@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
+ENV_DIR="/opt/homebrew/Caskroom/miniforge/base/"
 
 scriptdir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 echo $scriptdir
 echo "$(dirname ${scriptdir})/utils/"
 source "$(dirname ${scriptdir})/utils/bash_utils.sh"   # Includes functions called below
-python_exec="/opt/homebrew/Caskroom/miniforge/base/bin/python"
+python_exec="${ENV_DIR}/bin/python"
 repo_dir="$(get_repo_dir)"
 
 seed1=$RANDOM
