@@ -14,13 +14,13 @@ class GBPLayer(Layer, ABC):
         self.coeff_vars = coeff_vars
 
     def link_layer_before(self, layer_before):
-        def _update_input_marginals():
+        def _update_input_marginals(**kwargs):
             # Coeffs in previous layer are inputs to this layer
             # First get bottom up message from previous layer
-            eta_before, Lambda_before = layer_before._update_coeff_marginals(return_eta_Lambda=True)
+            eta_before, Lambda_before = layer_before._update_coeff_marginals(return_eta_Lambda=True, **kwargs)
 
             # Top down from this layer
-            eta_here, Lambda_here = self._update_input_marginals(return_eta_Lambda=True)
+            eta_here, Lambda_here = self._update_input_marginals(return_eta_Lambda=True, **kwargs)
 
             self.input_vars.eta = eta_before + eta_here
             self.input_vars.Lambda = Lambda_before + Lambda_here
@@ -30,11 +30,11 @@ class GBPLayer(Layer, ABC):
         self.update_input_marginals = _update_input_marginals
 
     @abstractmethod
-    def _update_input_marginals(self, return_eta_Lambda=False):
+    def _update_input_marginals(self, return_eta_Lambda=False, **kwargs):
         raise NotImplementedError('Implemented in child class')
 
     @abstractmethod
-    def _update_coeff_marginals(self, return_eta_Lambda=False):
+    def _update_coeff_marginals(self, return_eta_Lambda=False, **kwargs):
         raise NotImplementedError('Implemented in child class')
 
     @abstractmethod

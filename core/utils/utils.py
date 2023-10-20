@@ -150,9 +150,14 @@ def patchify_image(image, ksize_x=3, ksize_y=None, stride=1):
 def peak_snr(img_clean, img_denoised, mask=None, normalised_img=True, clip_img=True, crop_border=0):
     """See https://en.wikipedia.org/wiki/Peak_signal-to-noise_ratio"""
     max_intensity = 1. if normalised_img else 255.
+    mse_score = mse(img_clean, img_denoised, mask=mask, clip_img=clip_img, crop_border=crop_border)
+    ratio = max_intensity ** 2. / mse_score
+    return 10. * tf.math.log(ratio) / tf.math.log(10.)  # convert to base 10
+
+
+def mse(img_clean, img_denoised, mask, crop_border=0, clip_img=True):
     if clip_img:
         img_denoised = tf.clip_by_value(img_denoised, 0., 1.)
-
     diff = (img_clean - img_denoised)
     if crop_border > 0:
         cb = crop_border
@@ -160,25 +165,24 @@ def peak_snr(img_clean, img_denoised, mask=None, normalised_img=True, clip_img=T
     if mask is not None:
         if crop_border > 0:
             mask = mask[:, cb:-cb, cb:-cb]
-        diff = diff * (1. - tf.cast(mask, diff.dtype))[..., None]   # Mask is true if pixel not in inpainting region
-        n_noisy_pix = tf.reduce_sum(tf.ones_like(diff) * (1. - tf.cast(mask, diff.dtype))[..., None])
-        mse = tf.reduce_sum(diff ** 2.) / n_noisy_pix
+        mask_bc = tf.broadcast_to(mask, diff.shape)
+        msqe = tf.reduce_mean(tf.boolean_mask(diff ** 2., tf.logical_not(mask_bc)))
     else:
-        mse = tf.reduce_mean(diff ** 2.)
-    ratio = max_intensity ** 2. / mse
-    return 10. * tf.math.log(ratio) / tf.math.log(10.)  # convert to base 10
+        msqe = tf.reduce_mean(diff ** 2.)
+    return msqe
 
 
 def denoise_eval(denoised, frame_clean, mask=None, crop_border=0):
     psnr = peak_snr(frame_clean, denoised.mu, mask=mask, crop_border=crop_border)
+    mse_score = mse(frame_clean, denoised.mu, mask=mask, crop_border=crop_border)
     ll_elems = diag_gauss_logpdf(frame_clean, denoised.mu, denoised.sigma)
     if mask is not None:
-        ll_elems *= (1. - tf.cast(mask, ll_elems.dtype))[..., None]
+        ll_elems *= (1. - tf.cast(mask, ll_elems.dtype))
     if crop_border > 0:
         cb = crop_border
         ll_elems = ll_elems[:, cb:-cb, cb:-cb]
     ll = tf.reduce_sum(ll_elems)
-    return psnr, ll
+    return psnr, ll, mse_score
 
 
 def diag_gauss_logpdf(x, mu, std):
@@ -286,7 +290,7 @@ def load_video(video_path, H=None, W=None, normalise_video=True):
 
 
 def corrupt_image(img, frac_noise, noise_state=88, noise_seed=89,
-                  noise_type=float, noise_dist='uniform', mask_size=20, mask_topleft=None,
+                  noise_type=float, noise_dist='uniform', mask_size=20, border_without_mask=4, mask_topleft=None,
                   noise_channel=None, get_noise_mask=False):
     """
     Adds random [0, 1] noise to input image.
@@ -296,36 +300,25 @@ def corrupt_image(img, frac_noise, noise_state=88, noise_seed=89,
     stateseed = [noise_state, noise_seed]
     if noise_dist == 'mask':
         if mask_topleft is None:
-            xstart = tf.random.stateless_uniform((1,),
-                                                 minval=0,
-                                                 maxval=img.shape[2] - mask_size,
-                                                 dtype=tf.int32,
-                                                 seed=stateseed)
-            stateseed[1] += 231
-            ystart = tf.random.stateless_uniform((1,),
-                                                 minval=0,
-                                                 maxval=img.shape[1] - mask_size,
+            xystart = tf.random.stateless_uniform((img.shape[0], 2),
+                                                 minval=border_without_mask,
+                                                 maxval=img.shape[2] - border_without_mask - mask_size,
                                                  dtype=tf.int32,
                                                  seed=stateseed)
         else:
             ystart, xstart = mask_topleft
-            xstart = tf.convert_to_tensor([xstart])
-            ystart = tf.convert_to_tensor([ystart])
-        if noise_channel is None:
-            block_ids_grid = [[[xstart <= x < xstart + mask_size and ystart <= y < ystart + mask_size
-                                for x in range(img.shape[2])]
-                               for y in range(img.shape[1])]]
-        else:
-            block_ids_grid = [[[[xstart <= x < xstart + mask_size and
-                                 ystart <= y < ystart + mask_size and
-                                 z == noise_channel
-                                for x in range(img.shape[2])]
-                               for y in range(img.shape[1])]
-                              for z in range(img.shape[3])]]
-        block_ids_grid = tf.convert_to_tensor(block_ids_grid)
-        img_corrupt = tf.where(block_ids_grid, tf.random.stateless_normal(img.shape, mean=0.5, stddev=0.2, seed=[noise_seed, noise_state]), img)
+            xystart = tf.convert_to_tensor([xstart, ystart])
+
+        w_cond = tf.logical_and(xystart[:, None, 1] <= tf.range(img.shape[2])[None],
+                                tf.range(img.shape[2])[None] < xystart[:, None, 1] + mask_size)
+        h_cond = tf.logical_and(xystart[:, None, 0] <= tf.range(img.shape[1])[None],
+                                tf.range(img.shape[1])[None] < xystart[:, None, 0] + mask_size)
+        mask_cond = tf.logical_and(w_cond[:, None], h_cond[:, :, None])[..., None]
+        # img_corrupt = tf.where(mask_cond, tf.random.uniform(img.shape, minval=tf.reduce_min(img), maxval=tf.reduce_max(img)), img)
+        img_corrupt = tf.where(mask_cond, 0., img)
+        # img_corrupt = tf.where(block_ids_grid, tf.random.stateless_normal(img.shape, mean=0.5, stddev=0.2, seed=[noise_seed, noise_state]), img)
         # img_corrupt = tf.where(block_ids_grid, 0., img)
-        return img_corrupt, tf.logical_not(block_ids_grid)   # Will treat True values in mask as being observed pixels
+        return img_corrupt, tf.logical_not(mask_cond)   # Will treat True values in mask as being observed pixels
     # Generate noise with same dims as input image
     # Use seeded stateless noise generation for repeatability
     stateseed = [noise_state, noise_seed]
@@ -355,7 +348,7 @@ def corrupt_image(img, frac_noise, noise_state=88, noise_seed=89,
         #     noise = img + noise[None]
 
     else:
-        raise ValueError(f'`noise_type` must be in {allowed_noise_dists}, got {noise_dist}')
+        raise ValueError(f'`noise_dist` must be in {allowed_noise_dists}, got {noise_dist}')
 
     # Randomly select which pixels are going to have noise added
     # by sampling boolean mask

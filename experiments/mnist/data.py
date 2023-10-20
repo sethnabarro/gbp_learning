@@ -1,9 +1,9 @@
 # coding=utf-8
-from collections.abc import Generator
 import numpy as np
 import os
-import tensorflow as tf
 import tensorflow_datasets as tfds
+
+from core.utils.data import ReinitDataIterator
 
 
 def save_data_to_local(local_dir=None):
@@ -70,12 +70,23 @@ def load_data(datadir=None,
         else:
             test_by_class[cl] = np.load(os.path.join(datadir, f'mnist_test{cl}.npy')).astype(np.float32)
 
-        if rescale:
+    if (isinstance(rescale, bool) and rescale) or rescale == 'zero_one':
+        for cl in train_by_class:
             train_by_class[cl] /= 255.
             test_by_class[cl] /= 255.
+    elif rescale == 'mean_std':
+        all_tr = []
+        for cl in train_by_class:
+            all_tr.append(train_by_class[cl])
+        all_tr = np.concatenate(all_tr, axis=0)
+        mean_tr, std_tr = np.mean(all_tr), np.std(all_tr)
+        for cl in train_by_class:
+            train_by_class[cl] = (train_by_class[cl] - mean_tr) / std_tr
+            test_by_class[cl] = (test_by_class[cl] - mean_tr) / std_tr
 
     if shuffle:
         if shuffle_seed is not None:
+            print('Data shuffle seed', shuffle_seed)
             np.random.seed(shuffle_seed)
         for cl in range(n_classes):
             np.random.shuffle(train_by_class[cl])
@@ -97,24 +108,7 @@ def load_data(datadir=None,
     for cl in range(n_classes):
         train_by_class['examples_per_class'][cl] = train_by_class[cl].shape[0]
         test_by_class['examples_per_class'][cl] = test_by_class[cl].shape[0]
-        train_by_class[cl] = (im for im in train_by_class[cl])
+        train_by_class[cl] = ReinitDataIterator(train_by_class[cl])
         test_by_class[cl] = ReinitDataIterator(test_by_class[cl])   # Test data may be revisited multiple times
 
     return train_by_class, test_by_class
-
-
-class ReinitDataIterator(object):
-    def __init__(self, arr):
-        self.arr = arr
-        self.id_curr = 0
-
-    def __next__(self):
-        if self.id_curr < self.arr.shape[0]:
-            to_return = self.arr[self.id_curr]
-        else:
-            raise StopIteration
-        self.id_curr += 1
-        return to_return
-
-    def reinit(self):
-        self.id_curr = 0

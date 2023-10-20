@@ -1,16 +1,10 @@
 # coding=utf-8
-import numpy as np
 import os
-import tensorflow as tf
-import tensorflow_datasets as tfds
 
 from core.utils.utils import load_video, corrupt_image
 
 
-VIDEO_PATHS = {'walking': '../../inputs/walking_5fps/',
-               'duck': '../../inputs/mallard-fly/',
-               'bear': '../../inputs/bear/',
-               'monkeys': '../../inputs/monkeys/'}
+VIDEO_PATHS = {'bear': '../../inputs/bear/'}
 
 
 def load_and_corrupt_video(dataset_name, noise_seed=None, frac_noise=None, noise_dist=None, get_noise_mask=True):

@@ -114,3 +114,15 @@ class SoftmaxClassObservationFactor(NonLinearFactor):
     def set_edge_messages(self, edges):
         self.logit_var_edges.state = edges[0]
         return edges
+
+
+    @property
+    def state(self):
+        return [self.var0, self.get_edge_messages(), self.one_hot]
+
+    @state.setter
+    def state(self, new_state):
+        self.var0 = new_state[0]
+        self.set_edge_messages(new_state[1])
+        self.one_hot = new_state[2]
+

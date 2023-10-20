@@ -22,11 +22,12 @@ def parse_command_line_args():
     ap.add_argument('--reinit-input-only', action='store_true')
     ap.add_argument('--save-denoised-video', action='store_true')
     ap.add_argument('--eval-crop-border', type=int, default=0)
+    ap.add_argument('--filtering-alpha', type=float)
 
     # Model config
     ap.add_argument('--architecture', type=str,
                     choices=list(architectures.keys()),
-                    default='convnet')
+                    default='conv_tpose_single_layer_4')
     return ap.parse_args()
 
 
@@ -35,6 +36,7 @@ def get_config():
     exp_args = dd(dataset_name=cmd_args.dataset_name,
                   do_filtering=not cmd_args.no_filtering,
                   filter_biases=not cmd_args.no_filter_biases,
+                  filtering_alpha=cmd_args.filtering_alpha,
                   precision_rescaling=cmd_args.precision_rescaling,
                   precision_rescaling_conv_only=cmd_args.precision_rescaling_conv_only,
                   doing_validation=cmd_args.validation,
@@ -45,6 +47,7 @@ def get_config():
                   plot_coeffs=cmd_args.plot_coeffs,
                   plot_denoise_recon=cmd_args.plot_denoise_recon,
                   plot_message_convergence=cmd_args.plot_convergence,
+                  plot_generative=cmd_args.plot_generative,
                   plot_train_batch_freq=cmd_args.plot_train_batch_freq,
                   save_denoised_video=cmd_args.save_denoised_video,
                   results_dir=cmd_args.logdir,
@@ -69,6 +72,9 @@ def get_config():
                            ksize=3,
                            pairwise=cmd_args.pairwise_smoothing,
                            stride=1)
+    upsample_factor = dd(sigma=cmd_args.factors_upsample_sigma,
+                         ksize=2,
+                         relin_freq=1)
     pixel_obs_factor = dd(sigma=cmd_args.factors_pixel_obs_sigma,
                           N_rob=cmd_args.factors_pixel_obs_N_rob,
                           rob_type='tukey',
@@ -89,7 +95,8 @@ def get_config():
                  bias_prior=bias_prior_factor,
                  pixel_obs=pixel_obs_factor,
                  coeff_prior=coeff_prior_factor,
-                 avg_pool=avg_pool_factor)
+                 pool=avg_pool_factor,
+                 upsample=upsample_factor)
 
     netconf = get_network(cmd_args.architecture,
                           conv_sigmas=cmd_args.factors_recon_sigma_layers,
@@ -114,7 +121,7 @@ def get_config():
                 deterministic_init=False,
                 eval_crop_border=cmd_args.eval_crop_border,
                 momentum=cmd_args.momentum,
-                dropout=0.0,
+                dropout=cmd_args.dropout,
                 rescale=1.,
                 select_n_lowest_energy_filters=False,
                 use_filter_coeffs=True,
@@ -123,5 +130,5 @@ def get_config():
                 init_coeff_std=cmd_args.coeff_init_std,
                 random_coeff_init=True,
                 use_static_graph=False if cmd_args.not_static_graph is True else True,
-                xla_compile=False)
+                xla_compile=cmd_args.xla_compile)
     return config

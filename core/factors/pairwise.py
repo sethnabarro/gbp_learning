@@ -96,7 +96,6 @@ class PairwiseSmoothingFactorDecomp(NonLinearFactor):
             msg_in *= tf.cast(tf.math.mod(tf.range(ks2), 2), msg_in.dtype)[None, None,
                                  None, None, :, None]
 
-            # msg_in = tf.concat([msg_in[..., 0:1], tf.repeat(msg_in[..., int(ks2 / 2): int(ks2 / 2) + 1, 0:1], ks2, axis=-2)], axis=-1)
             msgs_combined.append(msg_in)
         return msgs_combined
 
@@ -145,8 +144,3 @@ class PairwiseSmoothingFactorDecomp(NonLinearFactor):
     def set_edge_messages(self, edges):
         self.input_var_edges.state, = edges
         return edges
-
-
-
-
-

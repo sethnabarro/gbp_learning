@@ -40,7 +40,7 @@ class Factor(FixedAttributeFieldsObject):
     def get_k_robust(self, E, N_rob=None):
         N_rob = N_rob or self.N_rob
         if N_rob is None or self.rob_type is None:
-            k = 1.
+            k = tf.ones_like(E)
         else:
             M_mnobis = tf.sqrt(E)
             N_div_M = N_rob / M_mnobis
@@ -254,16 +254,16 @@ class Factor(FixedAttributeFieldsObject):
         if mask is not None:
             J_div_sigma *= mask
             mess_Lambda_inv = tf.math.multiply_no_nan(mess_Lambda_inv, mask)
-
+        J_div_sigma2 = J_div_sigma ** 2.
         J_mess_Lambda_inv_Jeta_elem = tf.stack([J_div_sigma * mess_Lambda_inv * (factor_eta + mess_eta),
-                                                J_div_sigma ** 2. * mess_Lambda_inv], axis=-1)
-        J_mess_Lambda_inv_Jeta = tf.reduce_sum(J_mess_Lambda_inv_Jeta_elem, axis=-2)[..., None, :]
+                                                J_div_sigma2 * mess_Lambda_inv], axis=-1)
+        J_mess_Lambda_inv_Jeta = tf.reduce_sum(J_mess_Lambda_inv_Jeta_elem, axis=-2, keepdims=True)
         J_mess_Lambda_inv_Jeta_sub_elemcorr = J_mess_Lambda_inv_Jeta - J_mess_Lambda_inv_Jeta_elem
-        J_mess_Lambda_inv_J = J_mess_Lambda_inv_Jeta_sub_elemcorr[..., 1][..., None]
+        J_mess_Lambda_inv_J = J_mess_Lambda_inv_Jeta_sub_elemcorr[..., 1:]
         second = J_mess_Lambda_inv_J * J_mess_Lambda_inv_Jeta_sub_elemcorr / (1. + J_mess_Lambda_inv_J)
         adjustment = \
-            tf.stack([J_div_sigma, J_div_sigma ** 2.], axis=-1) * (J_mess_Lambda_inv_Jeta_sub_elemcorr - second)
-        marg = tf.stack([factor_eta, J_div_sigma ** 2.], axis=-1)
+            tf.stack([J_div_sigma, J_div_sigma2], axis=-1) * (J_mess_Lambda_inv_Jeta_sub_elemcorr - second)
+        marg = tf.stack([factor_eta, J_div_sigma2], axis=-1)
         outmsg = marg - adjustment
         factor_to_var_eta, factor_to_var_Lambda = outmsg[..., 0], outmsg[..., 1]
         if mask is not None:

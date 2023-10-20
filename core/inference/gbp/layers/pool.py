@@ -134,6 +134,7 @@ class GBPPoolLayer(GBPLayer):
         inputs = inputs if inputs is not None else self.input_vars.mu
         coeffs = coeffs if coeffs is not None else self.coeff_vars.mu
         energies = {f'{self.pool_type}_pool': self.pool_factor.energy([inputs, coeffs], robust=robust, aggregate=True)}
+        energies['coeff_prior'] = self.coeff_prior_factor.energy([coeffs], robust=robust, aggregate=True)
         if as_numpy:
             energies = {n: e.numpy() for n, e in energies.items()}
         if sum_all:

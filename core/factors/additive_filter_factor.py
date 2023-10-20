@@ -15,14 +15,9 @@ class AdditiveFilterFactor(NonLinearFactor):
                  init_lin_point,
                  N_rob=None,
                  rob_type='tukey',
-                 dynamic_robust_mixture_weight=False,
-                 pass_n_low_energy_filter_messages=False,
-                 compute_low_energy_filter_message_only=False,
                  rec_field=(3, 3),
                  stride=1,
-                 multidim_filter_vars=False,
                  coeff_var_edges=None,
-                 component_var_edges=None,
                  relative_to_centre=True,
                  relin_freq=1,
                  kmult=1.,
@@ -31,17 +26,12 @@ class AdditiveFilterFactor(NonLinearFactor):
                  nonlin_yscale=None):
         self.relative_to_centre = relative_to_centre
         super(AdditiveFilterFactor, self).__init__(sigma, init_lin_point, relin_freq, N_rob, rob_type, kmult=kmult)
-        self.dynamic_robust_mixture_weight = dynamic_robust_mixture_weight
-        self.compute_low_energy_filter_message_only = compute_low_energy_filter_message_only
-        self.pass_n_low_energy_filter_messages = pass_n_low_energy_filter_messages
         self.receptive_field = rec_field
         self.use_filter_coeffs = coeff_var_edges is not None
         self._set_eta_Lambda()
-        self.multidim_filter_vars = multidim_filter_vars
         self.input_var_edges = input_var_edges
         self.filter_var_edges = filter_var_edges
         self.coeff_var_edges = coeff_var_edges
-        self.use_component_vars = component_var_edges is not None
         self.lowest_energy_filter_ids = None
         self.stride = stride
         assert nonlin is None, "Nonlinearity only supported in weighted sum reconstruction factors"
@@ -95,11 +85,6 @@ class AdditiveFilterFactor(NonLinearFactor):
         else:
             eta, Lambda = self._eta, self._Lambda
         N_rob = self.N_rob
-        if self.dynamic_robust_mixture_weight:
-            E = self.energy(conn_vars, robust=False, aggregate=False)
-            E_min = tf.reduce_min(E, axis=-1)  # Minimum energies over factors connected to each neighbourhood
-            E_diff = E - E_min[..., None]
-            N_rob = tf.clip_by_value(N_rob - tf.sqrt(E_diff), 0.1, 1e10)
 
         E = self.energy(self.var0, robust=False, aggregate=False)
         if N_rob is not None:
@@ -114,36 +99,11 @@ class AdditiveFilterFactor(NonLinearFactor):
             facsize = self._eta.shape[0]
             eta = tf.broadcast_to(eta[None, None, None, None], [1, H - fsize + 1, W - fsize + 1, n_filt, facsize])
             Lambda = tf.broadcast_to(Lambda[None, None, None, None], [1, H - fsize + 1, W - fsize + 1, n_filt, facsize, facsize])
-        if self.pass_n_low_energy_filter_messages:
-            E = self.energy(conn_vars, robust=False, aggregate=False)
-            self.lowest_energy_filter_ids = tf.argsort(E,
-                                                       axis=-1,
-                                                       direction='ASCENDING')[..., :self.pass_n_low_energy_filter_messages]
-            eta = tf.gather(eta, self.lowest_energy_filter_ids, batch_dims=3, axis=-2)
-            Lambda = tf.gather(Lambda, self.lowest_energy_filter_ids, batch_dims=3, axis=-3)
+
         if 'return_k' in kwargs:
-            if kwargs['return_k']:
+            if kwargs['return_k'] and N_rob is not None:
                 return eta, Lambda, (k if self.N_rob is not None else 1.)
         return eta, Lambda
-
-    def _marg_iter_multidim_filter_var(self,
-                                       factor_plus_mess_eta,
-                                       factor_plus_mess_Lambda,
-                                       factor_eta,
-                                       factor_Lambda):
-        ksize = self.receptive_field[0] * self.receptive_field[1]
-
-        # Marginalise out the pixel vars
-        # TODO: souble check this is correct
-        Lambda_b_sub = factor_plus_mess_Lambda[..., :ksize, :]
-        Lambda_ba, Lambda_bb = Lambda_b_sub[..., ksize:], Lambda_b_sub[..., :ksize]
-        Lambda_aa = factor_Lambda[..., ksize:, ksize:]
-        eta_a, eta_b = factor_eta[..., ksize:], factor_plus_mess_eta[..., :ksize]
-        Lambda_bb_inv = tf.linalg.inv(Lambda_bb)
-        factor_to_var_Lambda_k = \
-            Lambda_aa - tf.einsum('abcdef,abcdeh,abcdhl->abcdfl', Lambda_ba, Lambda_bb_inv, Lambda_ba)
-        factor_to_var_eta_k = eta_a - tf.einsum('abcdel,abcdef,abcdf->abcdl', Lambda_ba, Lambda_bb_inv, eta_b)
-        return factor_to_var_eta_k, factor_to_var_Lambda_k
 
     def marginalise(self,
                     factor_plus_mess_eta,
@@ -154,7 +114,7 @@ class AdditiveFilterFactor(NonLinearFactor):
                     factor_Lambda,
                     nvar_marg=None):
         fsize = self.receptive_field[0] * self.receptive_field[1]
-        nvar_marg = fsize if self.multidim_filter_vars else fsize * 2 + int(self.use_filter_coeffs)
+        nvar_marg = fsize * 2 + int(self.use_filter_coeffs)
         factor_to_var_eta, factor_to_var_Lambda = \
             super(AdditiveFilterFactor, self).marginalise(factor_plus_mess_eta,
                                                           factor_plus_mess_Lambda,
@@ -162,47 +122,16 @@ class AdditiveFilterFactor(NonLinearFactor):
                                                           factor_Lambda,
                                                           nvar_to_marg=nvar_marg)
 
-        if self.multidim_filter_vars:
-            # Compute message to filter vars
-            factor_to_filter_eta, factor_to_filter_Lambda = \
-                self._marg_iter_multidim_filter_var(factor_plus_mess_eta=factor_plus_mess_eta,
-                                                    factor_plus_mess_Lambda=factor_plus_mess_Lambda,
-                                                    factor_eta=factor_eta,
-                                                    factor_Lambda=factor_Lambda)
-            factor_to_input_eta, factor_to_input_Lambda = factor_to_var_eta, factor_to_var_Lambda
-
-        else:
-            factor_to_input_eta = factor_to_var_eta[..., :fsize]
-            factor_to_filter_eta = factor_to_var_eta[..., fsize:2 * fsize]
-            factor_to_input_Lambda = factor_to_var_Lambda[..., :fsize]
-            factor_to_filter_Lambda = factor_to_var_Lambda[..., fsize:2 * fsize]
+        factor_to_input_eta = factor_to_var_eta[..., :fsize]
+        factor_to_filter_eta = factor_to_var_eta[..., fsize:2 * fsize]
+        factor_to_input_Lambda = factor_to_var_Lambda[..., :fsize]
+        factor_to_filter_Lambda = factor_to_var_Lambda[..., fsize:2 * fsize]
         out = (factor_to_input_eta, factor_to_input_Lambda, factor_to_filter_eta, factor_to_filter_Lambda)
         if self.use_filter_coeffs:
             factor_to_coeff_eta = factor_to_var_eta[..., -1][..., None]
             factor_to_coeff_Lambda = factor_to_var_Lambda[..., -1][..., None]
             out += (factor_to_coeff_eta, factor_to_coeff_Lambda)
         return out
-
-    def zero_higher_energy_filter_messages(self, *mess):
-        m_zerod = []
-        for m in mess:
-            n_filters = m.shape[3]
-            is_low_E = tf.fill(self.lowest_energy_filter_ids.shape, False)
-            for l in range(self.lowest_energy_filter_ids.shape[-1]):
-                is_low_E = tf.logical_or(is_low_E,
-                                              tf.range(n_filters) == self.lowest_energy_filter_ids[..., l][..., None])
-
-            mrank = len(tf.shape(m))
-            elow_rank = len(tf.shape(is_low_E))
-            is_low_E_unsqueeze = tf.reshape(is_low_E, list(is_low_E.shape) + [1] * (mrank - elow_rank))
-            m_zerod.append(tf.where(is_low_E_unsqueeze, m, m * 0.))
-
-        return m_zerod
-
-    def _select_low_energy_msgs(self, msg):
-        return tf.gather(msg,
-                         indices=self.lowest_energy_filter_ids,
-                         axis=3, batch_dims=3)
 
     def _broadcast_to_all_filters(self, n_filters, *msgs):
         msgs_bc = []
@@ -221,19 +150,9 @@ class AdditiveFilterFactor(NonLinearFactor):
             msgs = []
             for e in edges:
                 msg_in = getattr(e, f'var_to_fac_{mtype}')
+                msgs.append(msg_in)
 
-                if self.pass_n_low_energy_filter_messages:
-                    msgs.append(self._select_low_energy_msgs(msg_in))
-                else:
-                    msgs.append(msg_in)
-
-            if mtype == 'Lambda' and self.multidim_filter_vars:
-                msg_combined = tf.linalg.LinearOperatorBlockDiag(
-                    [tf.linalg.LinearOperatorDiag(msgs[0]),
-                     tf.linalg.LinearOperatorFullMatrix(msgs[1])]).to_dense()
-
-            else:
-                msg_combined = tf.concat(msgs, axis=-1)
+            msg_combined = tf.concat(msgs, axis=-1)
             msgs_combined.append(msg_combined)
         return msgs_combined
 
@@ -249,10 +168,7 @@ class AdditiveFilterFactor(NonLinearFactor):
 
         # Sum incoming messages with factor params
         factor_plus_mess_eta = var_msg_in_eta + factor_eta
-        if self.multidim_filter_vars:
-            factor_plus_mess_Lambda = var_msg_in_Lambda + factor_Lambda
-        else:
-            factor_plus_mess_Lambda = tf.linalg.diag(var_msg_in_Lambda) + factor_Lambda
+        factor_plus_mess_Lambda = tf.linalg.diag(var_msg_in_Lambda) + factor_Lambda
 
         # Marginalisation
         marg_outs = \
@@ -260,12 +176,6 @@ class AdditiveFilterFactor(NonLinearFactor):
                              factor_plus_mess_Lambda,
                              factor_eta,
                              factor_Lambda)
-
-        if self.pass_n_low_energy_filter_messages:
-            # Broadcast messages up to same shape as messages to all filters
-            # Zero out high energy messages
-            marg_outs = self._broadcast_to_all_filters(n_filters, *marg_outs)
-            marg_outs = self.zero_higher_energy_filter_messages(*marg_outs)
 
         self.input_var_edges.fac_to_var_eta, \
             self.input_var_edges.fac_to_var_Lambda,\
@@ -307,12 +217,6 @@ class AdditiveFilterFactor(NonLinearFactor):
             return tf.reduce_sum(E)
         else:
             return E
-
-    def zero_out_high_energy_variable_to_factor_messages(self):
-        for e in (self.input_var_edges, self.filter_var_edges):
-            for mtype in ('var_to_fac_eta', 'var_to_fac_Lambda'):
-                mess = getattr(e, mtype)
-                setattr(e, mtype, self.zero_higher_energy_filter_messages(mess)[0])
 
     def get_edge_messages(self):
         edges = [self.input_var_edges.state,

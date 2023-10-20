@@ -6,16 +6,11 @@ from core.factors.additive_filter_factor import AdditiveFilterFactor
 from core.factors.additive_filter_factor_sum import AdditiveFilterFactorSum
 from core.factors.additive_filter_factor_sum_decomp import AdditiveFilterFactorSumDecomp
 from core.factors.additive_filter_factor_decomp import AdditiveFilterFactorDecomp
-from core.factors.additive_filter_factor_sum_pixel import AdditiveFilterFactorSumPixel
-from core.factors.binary_class import BinaryClassObservationFactor
-from core.factors.component import ComponentFactor
+from core.factors.additive_filter_factor_sum_tpose import AdditiveFilterFactorSumTpose
 from core.factors.dense import DenseFactor
-from core.factors.diversity import DiversityFactor, DiversityFactorCosineSim, get_filter_to_filter_diversity_factor_messages
 from core.factors.feedforward_filter_factor import FeedforwardFilterFactor
-from core.factors.filter_normalisation import FilterNormalisationFactor
-from core.factors.non_zero_weight_norm import NonZeroWeightNormFactor, NonZeroWeightNormFactorSoftplus
 from core.factors.pixel_obs import PixelObservationFactor
 from core.factors.pairwise import PairwiseSmoothingFactorDecomp
-from core.factors.segmentation_obs import BinarySegmentationObservationFactor, SegmentationObservationFactor, SoftmaxSegmentationObservationFactor
 from core.factors.softmax_class import SoftmaxClassObservationFactor
 from core.factors.unary_factor import UnaryFactor, NonLinearUnaryFactor
+from core.factors.upsample import UpsampleFactor

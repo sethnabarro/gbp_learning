@@ -12,7 +12,6 @@ class AdditiveFilterFactorSum(NonLinearFactor):
                  n_filters,
                  filter_var_edges=None,
                  coeff_var_edges=None,
-                 component_var_edges=None,
                  bias_var_edges=None,
                  N_rob=None,
                  rob_type='tukey',
@@ -20,20 +19,13 @@ class AdditiveFilterFactorSum(NonLinearFactor):
                  relin_freq=1,
                  relative_to_centre=True,
                  kmult=1.,
-                 dynamic_robust_mixture_weight=False,
-                 pass_n_low_energy_filter_messages=False,
-                 compute_low_energy_filter_message_only=False,
                  rec_field=(3, 3),
                  stride=1,
-                 multidim_filter_vars=False,
-                 use_component_vars=None,
                  nonlin=None,
                  nonlin_yscale=1.,
                  nonlin_xscale=1.,
                  coeff_padding=None
                  ):
-        assert not pass_n_low_energy_filter_messages, "not yet supported"
-        assert not multidim_filter_vars, "not yet supported"
         self.n_filt = n_filters
         self.coeff_padding = coeff_padding or 0
         init_lin_point[2] = self.trim_coeffs(init_lin_point[2])
@@ -46,13 +38,10 @@ class AdditiveFilterFactorSum(NonLinearFactor):
             kmult=kmult)
         self.stride = stride
         self.receptive_field = rec_field
-        self.multidim_filter_vars = multidim_filter_vars
         self.input_var_edges = input_var_edges
         self.filter_var_edges = filter_var_edges
         self.coeff_var_edges = coeff_var_edges
         self.bias_var_edges = bias_var_edges
-        self.component_var_edges = component_var_edges
-        self.use_component_vars = use_component_vars or (component_var_edges is not None)
         self.use_bias = bias_var_edges is not None
 
         self.nonlin, self.nonlin_grad = \
@@ -83,7 +72,7 @@ class AdditiveFilterFactorSum(NonLinearFactor):
             msgs_combined.append(msg_combined)
         return msgs_combined
 
-    def _energy_filter_coeffs(self, conn_vars, robust=None, aggregate=True, sum_over_nhood=True, input_patches=None):
+    def energy(self, conn_vars, robust=None, aggregate=True, sum_over_nhood=True, input_patches=None):
         filters, inputs, coeffs = conn_vars[:3]
 
         if coeffs.shape[1] * self.stride == inputs.shape[1]:
@@ -113,35 +102,6 @@ class AdditiveFilterFactorSum(NonLinearFactor):
             return tf.reduce_sum(E)
         else:
             return E
-
-    def _energy_components(self, conn_vars, robust=None, aggregate=True, sum_over_nhood=True, input_patches=None):
-        components, inputs = conn_vars
-        fs = self.receptive_field[0] * self.receptive_field[1]
-        if input_patches is None:
-            input_patches = patchify_image(image=inputs,
-                                           ksize_y=self.receptive_field[0],
-                                           ksize_x=self.receptive_field[1],
-                                           stride=self.stride)
-        diff = input_patches - input_patches[..., int(fs / 2)][..., None] - self.nonlin(tf.reduce_sum(components, axis=-2))
-        E = diff ** 2 / self.sigma ** 2
-        if sum_over_nhood:
-            E = tf.reduce_sum(E, axis=-1)
-        if robust is None:
-            robust = self.N_rob is not None
-        if robust and self.N_rob is not None:
-            E = self._robust_correct_energy(E)
-        E = E[..., None]
-
-        if aggregate:
-            return tf.reduce_sum(E)
-        else:
-            return E
-
-    def energy(self, *args, **kwargs):
-        if self.use_component_vars:
-            return self._energy_components(*args, **kwargs)
-        else:
-            return self._energy_filter_coeffs(*args, **kwargs)
 
     def get_eta_Lambda(self, conn_vars):
         filters, inputs_mu, coeffs = self.var0
@@ -223,17 +183,13 @@ class AdditiveFilterFactorSum(NonLinearFactor):
     def get_edge_messages(self, named=False):
         attr_to_get = 'named_state' if named else 'state'
         enames = []
-        if self.use_component_vars:
-            edges = [getattr(self.input_var_edges, attr_to_get),
-                     getattr(self.component_var_edges, attr_to_get)]
-            enames += [str(self.input_var_edges), str(self.component_var_edges)]
-        else:
-            edges = [getattr(self.input_var_edges, attr_to_get),
-                     getattr(self.filter_var_edges, attr_to_get),
-                     getattr(self.coeff_var_edges, attr_to_get)]
-            enames += [str(self.input_var_edges),
-                       str(self.filter_var_edges),
-                       str(self.coeff_var_edges)]
+
+        edges = [getattr(self.input_var_edges, attr_to_get),
+                 getattr(self.filter_var_edges, attr_to_get),
+                 getattr(self.coeff_var_edges, attr_to_get)]
+        enames += [str(self.input_var_edges),
+                   str(self.filter_var_edges),
+                   str(self.coeff_var_edges)]
         if self.use_bias:
             edges.append(getattr(self.bias_var_edges, attr_to_get))
             enames.append(str(self.bias_var_edges))
@@ -242,9 +198,7 @@ class AdditiveFilterFactorSum(NonLinearFactor):
         return edges
 
     def set_edge_messages(self, edges):
-        if self.use_component_vars:
-            self.input_var_edges.state, self.component_var_edges.state = edges
-        elif self.use_bias:
+        if self.use_bias:
             self.input_var_edges.state,\
                 self.filter_var_edges.state, \
                 self.coeff_var_edges.state, \

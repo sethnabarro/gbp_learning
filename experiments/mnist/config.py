@@ -15,23 +15,25 @@ def parse_command_line_args():
                        inc_validation=True)
 
     ap.add_argument('--fix-params-for-testing', action='store_true')    # Filtering (between train and test)
+    ap.add_argument('--corrupt-test-inputs', type=str)             # Whether and how to add noise to test images
+    ap.add_argument('--input-rescale', type=str, choices=('zero_one', 'mean_std'))  # How to rescale images
     ap.add_argument('--test-on-train-set', action='store_true')    # Check ability to overfit
-    ap.add_argument('--no-task-crosstalk-train', action='store_true')
-    ap.add_argument('--no-task-crosstalk-test', action='store_true')
     ap.add_argument('--remaining-tasks-train', type=eval)
     ap.add_argument('--mnist-experiment-type',
-                    default='split_mnist',
+                    default='standard_mnist',
                     type=str,
-                    choices=('split_mnist', 'standard_mnist', 'unsupervised'))
+                    choices=('standard_mnist',))
+    ap.add_argument('--inference-test', type=str, choices=('gd', 'gbp'))
 
-    # For NN baseline
-    ap.add_argument('--backprop-optimiser', type=json.loads)
-    ap.add_argument('--nn-architecture', type=json.loads)
+    # If below arg given then each batch will have same class proportions
+    # as full training set, else each batch will have equal numbers of examples
+    # from each class (until the end of the dataset is approached).
+    ap.add_argument('--not-class-balanced-batches-train', action='store_true')
 
     # Model config
     ap.add_argument('--architecture', type=str,
                     choices=list(architectures.keys()),
-                    default='bignet')
+                    default='three_layer_k5_ff_8')
     args = ap.parse_args()
     return args
 
@@ -44,14 +46,14 @@ def get_config():
     exp_args = dd(fix_params_for_testing=cmd_args.fix_params_for_testing,
                   with_gbp_softmax_layer=not cmd_args.no_dense_softmax_layer,
                   test_on_train_set=cmd_args.test_on_train_set,       # To check memorisation
-                  test_on_future_tasks=False,
-                  remaining_tasks_train=cmd_args.remaining_tasks_train,
+                  corrupt_test_inputs=cmd_args.corrupt_test_inputs,
                   do_filtering=not cmd_args.no_filtering,
                   filter_biases=not cmd_args.no_filter_biases,
                   precision_rescaling=cmd_args.precision_rescaling,
                   precision_rescaling_test=cmd_args.precision_rescaling_test,
                   precision_rescaling_conv_only=cmd_args.precision_rescaling_conv_only,
                   n_classes=10,
+                  input_rescale=cmd_args.input_rescale,
                   doing_validation=cmd_args.validation,
                   n_validation_data=cmd_args.n_validation_data,
                   test_only=cmd_args.test_only,
@@ -59,12 +61,14 @@ def get_config():
                   examples_per_class_test=cmd_args.examples_per_class_test,
                   batchsize_train=cmd_args.batchsize_train,
                   batchsize_test=cmd_args.batchsize_test,
+                  class_balanced_batches_train=not bool(cmd_args.not_class_balanced_batches_train),
                   weight_init_seed=cmd_args.weight_seed,
                   coeff_init_seed=cmd_args.coeff_seed,
                   dataset_shuffle_seed=cmd_args.data_seed,
                   shuffle_batches=cmd_args.shuffle_batches,
                   plot_weights=cmd_args.plot_weights,
                   plot_coeffs=cmd_args.plot_coeffs,
+                  plot_generative=cmd_args.plot_generative,
                   plot_message_convergence=cmd_args.plot_convergence,
                   plot_after_each_batch=cmd_args.plot_every_batch,
                   plot_train_batch_freq=cmd_args.plot_train_batch_freq,
@@ -78,12 +82,11 @@ def get_config():
                   record_all_msg_diffs=cmd_args.plot_convergence,
                   checkpoint_frequency_batches=cmd_args.checkpoint_frequency_batches,
                   save_best_model=cmd_args.checkpoint_frequency_batches is not None,
-                  no_task_crosstalk_train=cmd_args.no_task_crosstalk_train,
-                  no_task_crosstalk_test=cmd_args.no_task_crosstalk_test,
+                  copy_lin_points=cmd_args.copy_lin_points,
                   )
     recon_factor_args = dd(additive_factor=True,
                            sigma=cmd_args.factors_recon_sigma,
-                           N_rob=4.,
+                           N_rob=None,
                            rob_type='tukey',
                            sum_filters=True,
                            kmult=1.,
@@ -93,22 +96,26 @@ def get_config():
                            nonlin_yscale=1.,
                            nonlin_xscale=1.,
                            use_bias=not cmd_args.factors_recon_no_bias,
-                           relative_to_centre=False,
+                           relative_to_centre=cmd_args.factors_recon_relative_to_centre if cmd_args.factors_recon_relative_to_centre is not None else False,
                            feedforward=cmd_args.factors_recon_feedforward,
                            ksize=3,
                            stride=1,
                            fac_to_var_chunksize=8)
     pixel_obs_factor = dd(sigma=cmd_args.factors_pixel_obs_sigma,
-                          N_rob=10.,
+                          N_rob=None,
                           rob_type='tukey',
                           kmult=1.,
-                          relin_freq=cmd_args.relin_freq)
+                          relin_freq=cmd_args.relin_freq,
+                          mask_prec=1e1)
     pool_factor = dd(sigma=cmd_args.factors_avg_pool_sigma,
                      ksize=2,
                      relin_freq=1)
+    upsample_factor = dd(sigma=cmd_args.factors_upsample_sigma,
+                         ksize=2,
+                         relin_freq=1)
     filter_prior_factor = dd(sigma=cmd_args.factors_weight_prior_sigma, mean=0.)
     coeff_prior_factor = dd(sigma=cmd_args.factors_coeff_prior_sigma,
-                            N_rob=cmd_args.factors_recon_coeff_prior_N_rob,
+                            N_rob=None,
                             rob_type='tukey',
                             mean=0.,
                             relin_freq=cmd_args.relin_freq,
@@ -117,8 +124,9 @@ def get_config():
                             relin_freq=cmd_args.relin_freq)
     dense_factor = dd(sigma=cmd_args.factors_dense_sigma,
                       relin_freq=cmd_args.relin_freq,
-                      use_bias=True,
-                      fac_to_var_chunksize=32,)
+                      use_bias=(not cmd_args.factors_dense_no_bias) if cmd_args.factors_dense_no_bias is not None else True,
+                      fac_to_var_chunksize=32,
+                      decompose=True)
     bias_prior_factor = dd(mean=0., sigma=cmd_args.factors_bias_prior_sigma)
     factors = dd(recon=recon_factor_args,
                  weight_prior=filter_prior_factor,
@@ -126,23 +134,22 @@ def get_config():
                  pixel_obs=pixel_obs_factor,
                  coeff_prior=coeff_prior_factor,
                  pool=pool_factor,
+                 upsample=upsample_factor,
                  softmax_class_obs=softmax_obs_factor,
                  dense=dense_factor)
 
-    if cmd_args.inference == 'backprop':
-        netconf = dd(cmd_args.nn_architecture)
-    else:
-        netconf = get_network(cmd_args.architecture,
-                              conv_sigmas=cmd_args.factors_recon_sigma_layers,
-                              conv_coeff_prior_N_robs=cmd_args.factors_coeff_prior_N_rob_layers,
-                              conv_coeff_prior_sigmas=cmd_args.factors_coeff_prior_sigma_layers,
-                              dense_coeff_prior_sigma=cmd_args.factors_dense_coeff_prior_sigma,
-                              dense_weight_prior_sigma=cmd_args.factors_dense_weight_prior_sigma)
+    netconf = get_network(cmd_args.architecture,
+                          conv_sigmas=cmd_args.factors_recon_sigma_layers,
+                          conv_coeff_prior_N_robs=cmd_args.factors_coeff_prior_N_rob_layers,
+                          conv_coeff_prior_sigmas=cmd_args.factors_coeff_prior_sigma_layers,
+                          dense_coeff_prior_sigma=cmd_args.factors_dense_coeff_prior_sigma,
+                          dense_coeff_prior_N_rob=cmd_args.factors_dense_coeff_prior_N_rob,
+                          dense_weight_prior_sigma=cmd_args.factors_dense_weight_prior_sigma)
     config = dd(inference=cmd_args.inference,
+                inference_test=cmd_args.inference_test,  # May be None
                 exp_type=cmd_args.mnist_experiment_type,
                 tf_deterministic=cmd_args.tf_deterministic,
                 architecture=netconf,
-                backprop_optimiser=dd(cmd_args.backprop_optimiser) if cmd_args.backprop_optimiser is not None else None,
                 layer_schedule=cmd_args.layer_schedule,
                 random_layer_schedule=cmd_args.random_layer_schedule or False,
                 experiment=exp_args,
@@ -155,14 +162,14 @@ def get_config():
                 n_test_batches=cmd_args.n_test_batches,
                 deterministic_init=False,
                 momentum=cmd_args.momentum,
-                dropout=0.0,
+                dropout=cmd_args.dropout,
+                gd_optim='adam',
+                gd_lr=1e-3,
                 rescale=1.,
-                select_n_lowest_energy_filters=False,
                 use_filter_coeffs=True,
-                use_component_vars=False,
                 init_weight_std=cmd_args.weight_init_std,
                 init_coeff_std=cmd_args.coeff_init_std,
                 random_coeff_init=True,
                 use_static_graph=False if cmd_args.not_static_graph is True else True,
-                xla_compile=False)
+                xla_compile=cmd_args.xla_compile)
     return config

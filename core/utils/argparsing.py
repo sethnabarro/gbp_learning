@@ -21,8 +21,9 @@ def get_argparser(inc_filtering=False,
     ap.add_argument('--config-filepath', type=str)
     ap.add_argument('--load-checkpoint-dir', type=str)
     ap.add_argument('--not-static-graph', action='store_true')
+    ap.add_argument('--xla-compile', action='store_true')
 
-    ap.add_argument('--examples-per-class-train')     # How many imgs in train set to subsample
+    ap.add_argument('--examples-per-class-train', type=int)     # How many imgs in train set to subsample
     ap.add_argument('--batchsize-train', type=int)
     ap.add_argument('--n-iters-per-train-batch', type=int, default=1000)   # Number of iters per batch
     ap.add_argument('--n-train-batches', type=int)
@@ -33,6 +34,7 @@ def get_argparser(inc_filtering=False,
     ap.add_argument('--layer-schedule', nargs='+', required=False, type=int)
     ap.add_argument('--random-layer-schedule', action='store_true')
     ap.add_argument('--momentum', type=float, default=0.8)
+    ap.add_argument('--dropout', type=float, default=0.)
     ap.add_argument('--relin-freq', type=int, default=1)
     ap.add_argument('--inference', type=str, default='gbp', choices=('gbp', 'gd', 'backprop'))
 
@@ -87,9 +89,11 @@ def add_factor_args(argp):
                       help='σs for recon factors in each layer')
     argp.add_argument('--factors-recon-N-rob', type=float, default=4.)
     argp.add_argument('--factors-recon-no-bias', action='store_true')
+    argp.add_argument('--factors-recon-relative-to-centre', action='store_true')
     argp.add_argument('--factors-pixel-obs-sigma', type=float, default=0.02)
     argp.add_argument('--factors-pixel-obs-N-rob', type=float, default=10.)
     argp.add_argument('--factors-avg-pool-sigma', type=float, default=0.05)
+    argp.add_argument('--factors-upsample-sigma', type=float, default=0.05)
     argp.add_argument('--factors-softmax-obs-sigma', type=float, default=0.02)
     argp.add_argument('--factors-dense-sigma', type=float, default=0.1)
     argp.add_argument('--factors-dense-coeff-prior-sigma', type=float, default=1.)
@@ -98,6 +102,7 @@ def add_factor_args(argp):
     argp.add_argument('--factors-coeff-prior-sigma', type=float, default=1.)
     argp.add_argument('--factors-recon-coeff-prior-N-rob', type=float)
     argp.add_argument('--factors-dense-coeff-prior-N-rob', type=float)
+    argp.add_argument('--factors-dense-no-bias', action='store_true')
     argp.add_argument('--factors-weight-prior-sigma', type=float, default=1.)
     argp.add_argument('--factors-segment-weight-prior-sigma', type=float)
     argp.add_argument('--factors-coeff-prior-N-rob-layers', type=float, nargs='+')
@@ -126,7 +131,7 @@ def add_testing_args(argp):
     argp.add_argument('--n-test-batches', type=int)
     argp.add_argument('--n-test-eval-breaks', type=int, default=1)        # How many times to stop and eval during test time inference
     argp.add_argument('--batchsize-test', type=int)
-    argp.add_argument('--examples-per-class-test')
+    argp.add_argument('--examples-per-class-test', type=int)
     argp.add_argument('--n-iters-per-test-batch', type=int, default=1000)
     argp.add_argument('--profile-test', action='store_true')
     argp.add_argument('--test-only', action='store_true')
@@ -150,6 +155,7 @@ def add_classification_args(argp):
 def add_plotting_args(argp):
     argp.add_argument('--plot-coeffs', action='store_true')
     argp.add_argument('--plot-weights', action='store_true')
+    argp.add_argument('--plot-generative', action='store_true')
     argp.add_argument('--plot-convergence', action='store_true')
     argp.add_argument('--plot-every-batch', action='store_true')
     argp.add_argument('--plot-train-batch-freq', type=int)

@@ -98,11 +98,14 @@ class Edge(FixedAttributeFieldsObject):
             new_with_mom = old * self.momentum + new * (1. - self.momentum)
             return tf.where(first_iter, new, new_with_mom)
 
-    def _apply_dropout(self, new_msg, old_msg, first_iter):
+    def _apply_dropout(self, new_msg, old_msg, first_iter, seed=None):
         if self.dropout == 0.:
             return new_msg
         else:
-            runif = tf.random.uniform(old_msg.shape, minval=0., maxval=1.)
+            if seed is None:
+                runif = tf.random.uniform(old_msg.shape, minval=0., maxval=1.)
+            else:
+                runif = tf.random.stateless_uniform(old_msg.shape, minval=0., maxval=1., seed=[seed, seed])
             drop_mask = tf.cast(runif < self.dropout, old_msg.dtype)
             new_with_dropout = new_msg * (1. - drop_mask) + old_msg * drop_mask
             return tf.where(first_iter, new_msg, new_with_dropout)
@@ -153,7 +156,7 @@ class Edge(FixedAttributeFieldsObject):
         old = self._fac_to_var_eta
         self._check_msg_shapes(eta_new, self._fac_to_var_eta)
         eta_mom_new = self._apply_momtm(eta_new, self._fac_to_var_eta, self.iter['fac_to_var_eta'] == 0)
-        self._fac_to_var_eta = self._apply_dropout(eta_mom_new, self._fac_to_var_eta, self.iter['fac_to_var_eta'] == 0)
+        self._fac_to_var_eta = self._apply_dropout(eta_mom_new, self._fac_to_var_eta, self.iter['fac_to_var_eta'] == 0, self.iter['fac_to_var_eta'][0])
 
         if self.track_msg_diffs:
             self._update_msg_diff(old, eta_new, 'fac_to_var_eta')
@@ -165,7 +168,7 @@ class Edge(FixedAttributeFieldsObject):
         old = self._fac_to_var_Lambda
         self._check_msg_shapes(Lambda_new, self._fac_to_var_Lambda)
         Lambda_mom_new = self._apply_momtm(Lambda_new, self._fac_to_var_Lambda, self.iter['fac_to_var_Lambda'] == 0)
-        self._fac_to_var_Lambda = self._apply_dropout(Lambda_mom_new, self._fac_to_var_Lambda, self.iter['fac_to_var_Lambda'] == 0)
+        self._fac_to_var_Lambda = self._apply_dropout(Lambda_mom_new, self._fac_to_var_Lambda, self.iter['fac_to_var_Lambda'] == 0, self.iter['fac_to_var_Lambda'][0])
 
         if self.track_msg_diffs:
             self._update_msg_diff(old, Lambda_new, 'fac_to_var_Lambda')

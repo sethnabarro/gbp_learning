@@ -28,9 +28,7 @@ class GBPLearner(Learner):
             else:
                 assert isinstance(lays_sched, int), \
                     "Elements of `layer_schedule` must be ints or iterables"
-                with tf.control_dependencies(control_deps):
-                    self.layers[lays_sched].intra_layer_inference_iter(itr)
-                control_deps = self.layers[lays_sched].state
+                self.layers[lays_sched].intra_layer_inference_iter(itr)
 
         return [itr + 1] + self.state
 
@@ -229,7 +227,9 @@ class TensorStacker(object):
 def filtering_on_weights(gbplearner_prev: [GBPLearner, list, tuple],
                          gbplearner_new: GBPLearner,
                          prec_rescale_factor: float = 1.,
-                         prec_rescale_conv_only: bool = False):
+                         prec_rescale_conv_only: bool = False,
+                         alpha: [None, float] = None,
+                         init_prior_sigmas: [None, list, tuple] = None):
     """
     Takes posterior over learnable weights/filters in `gbplearner_prev` and
     sets it as a prior on the same variables in `gbplearner_new`
@@ -252,6 +252,8 @@ def filtering_on_weights(gbplearner_prev: [GBPLearner, list, tuple],
                 gbplearnerprev.layers.append(None)
         gbplearner_prev = gbplearnerprev
 
+    init_prior_sigmas = init_prior_sigmas if init_prior_sigmas is None else iter(init_prior_sigmas)
+
     # Get posterior marginals over weights (for dense layers)
     # and filters (for conv layers) in gbplearner_prev
     # Set the eta and Lambda for the corresponding prior factors in gbplearner_new
@@ -266,6 +268,15 @@ def filtering_on_weights(gbplearner_prev: [GBPLearner, list, tuple],
             # Rescale both the precision and info by specified factor (rescaling variance)
             posterior_eta = flatten_filters(lay_old.filter_vars.eta * prec_rescale_factor)
             posterior_Lambda = flatten_filters(lay_old.filter_vars.Lambda * prec_rescale_factor)
+
+            if alpha is not None:
+                # Make prior from weighted mix of old posterior and init prior
+                mean = posterior_eta / posterior_Lambda
+                std = tf.math.sqrt(1. / posterior_Lambda)
+                mean = alpha * mean + (1. - alpha) * 0.
+                std = alpha * std + (1. - alpha) * next(init_prior_sigmas)
+                posterior_eta = mean / std ** 2.
+                posterior_Lambda = 1. / std ** 2.
 
             # Set prior over filters in new graph to posterior in old graph
             lay_new.filter_prior_factor.reset_eta_Lambda(posterior_eta, posterior_Lambda)
@@ -295,6 +306,15 @@ def filtering_on_weights(gbplearner_prev: [GBPLearner, list, tuple],
                 posterior_eta *= prec_rescale_factor
                 posterior_Lambda *= prec_rescale_factor
 
+            if alpha is not None:
+                # Make prior from weighted mix of old posterior and init prior
+                mean = posterior_eta / posterior_Lambda
+                std = tf.math.sqrt(1. / posterior_Lambda)
+                mean = alpha * mean + (1. - alpha) * 0.
+                std = alpha * std + (1. - alpha) * next(init_prior_sigmas)
+                posterior_eta = mean / std ** 2.
+                posterior_Lambda = 1. / std ** 2.
+
             # Set weight prior in new graph to weight posterior from old graph
             lay_new.weight_prior_factor.reset_eta_Lambda(posterior_eta, posterior_Lambda)
 
@@ -302,6 +322,9 @@ def filtering_on_weights(gbplearner_prev: [GBPLearner, list, tuple],
             edge_shp = lay_new.dense_factor.weight_var_edges.var_to_fac_eta.shape
             lay_new.dense_factor.weight_var_edges.var_to_fac_eta = tf.broadcast_to(tf.transpose(posterior_eta)[None], edge_shp)
             lay_new.dense_factor.weight_var_edges.var_to_fac_Lambda = tf.broadcast_to(tf.transpose(posterior_Lambda)[None], edge_shp)
+
+            # lay_new.dense_factor.input_var_edges.var_to_fac_eta = tf.broadcast_to(tf.transpose(posterior_eta)[None], edge_shp)
+            # lay_new.dense_factor.input_var_edges.var_to_fac_Lambda = tf.broadcast_to(tf.transpose(posterior_Lambda)[None], edge_shp)
             print(tf.reduce_mean(posterior_Lambda), 'post lambda mean weight')
             # We adjusted the priors, so recompute marginals to keep up to date
             lay_new.update_weight_marginals()
@@ -313,7 +336,9 @@ def filtering_on_weights(gbplearner_prev: [GBPLearner, list, tuple],
 def filtering_on_biases(gbplearner_prev: [GBPLearner, list, tuple],
                         gbplearner_new: GBPLearner,
                         prec_rescale_factor: float = 1.,
-                        prec_rescale_conv_only: bool = False):
+                        prec_rescale_conv_only: bool = False,
+                        alpha: [None, float] = None,
+                        init_prior_sigmas: [None, list, tuple] = None):
     """
     Takes posterior over learnable biases in `gbplearner_prev` and
     sets it as a prior on the same variables in `gbplearner_new`
@@ -325,12 +350,17 @@ def filtering_on_biases(gbplearner_prev: [GBPLearner, list, tuple],
         gbplearnerprev = dotdict(layers=[])
         bias_id = 0
         for i, l in enumerate(gbplearner_new.layers):
+            if hasattr(l, 'use_bias'):
+                if not l.use_bias:
+                    continue
             if hasattr(l, 'bias_vars'):
                 gbplearnerprev.layers.append(dotdict({'bias_vars': dotdict(gbplearner_prev[bias_id])}))
                 bias_id += 1
             else:
                 gbplearnerprev.layers.append(None)
         gbplearner_prev = gbplearnerprev
+
+    init_prior_sigmas = init_prior_sigmas if init_prior_sigmas is None else iter(init_prior_sigmas)
 
     # Get posterior marginals over biases
     # Set the eta and Lambda for the corresponding prior factors in gbplearner_new
@@ -346,13 +376,21 @@ def filtering_on_biases(gbplearner_prev: [GBPLearner, list, tuple],
                 # Rescale both the precision and info by specified factor (rescaling variance)
                 posterior_eta = lay_old.bias_vars.eta * prec_rescale_factor
                 posterior_Lambda = lay_old.bias_vars.Lambda * prec_rescale_factor
+                if alpha is not None:
+                    # Make prior from weighted mix of old posterior and init prior
+                    mean = posterior_eta / posterior_Lambda
+                    std = tf.math.sqrt(1. / posterior_Lambda)
+                    mean = alpha * mean + (1. - alpha) * 0.
+                    std = alpha * std + (1. - alpha) * next(init_prior_sigmas)
+                    posterior_eta = mean / std ** 2.
+                    posterior_Lambda = 1. / std ** 2.
 
                 # Set weight prior in new graph to weight posterior from old graph
                 lay_new.bias_prior_factor.reset_eta_Lambda(posterior_eta, posterior_Lambda)
 
                 # Initialise message from filter variables to recon factors equal to prev posterior
                 edge_shp = lay_new.filter_factor.bias_var_edges.var_to_fac_eta.shape
-                if lay_new.use_feedforward_factor:
+                if lay_new.use_feedforward_factor or lay_new.use_tpose_recon:
                     eta_expand = posterior_eta[None, None, None]
                     Lambda_expand = posterior_Lambda[None, None, None]
                 else:
@@ -380,6 +418,15 @@ def filtering_on_biases(gbplearner_prev: [GBPLearner, list, tuple],
                 if not prec_rescale_conv_only:
                     posterior_eta *= prec_rescale_factor
                     posterior_Lambda *= prec_rescale_factor
+
+                if alpha is not None:
+                    # Make prior from weighted mix of old posterior and init prior
+                    mean = posterior_eta / posterior_Lambda
+                    std = tf.math.sqrt(1. / posterior_Lambda)
+                    mean = alpha * mean + (1. - alpha) * 0.
+                    std = alpha * std + (1. - alpha) * next(init_prior_sigmas)
+                    posterior_eta = mean / std ** 2.
+                    posterior_Lambda = 1. / std ** 2.
 
                 # Set weight prior in new graph to weight posterior from old graph
                 lay_new.bias_prior_factor.reset_eta_Lambda(posterior_eta, posterior_Lambda)
@@ -411,11 +458,15 @@ def filtering_on_coeffs(gbplearner_prev: [GBPLearner, list, tuple],
     from_coeff_vars = isinstance(gbplearner_prev, (list, tuple))
     if from_coeff_vars:
         gbplearnerprev = dotdict(layers=[])
-        bias_id = 0
+        coeff_id = 0
         for i, l in enumerate(gbplearner_new.layers):
             if hasattr(l, 'coeff_vars'):
-                gbplearnerprev.layers.append(dotdict({'coeff_vars': dotdict(gbplearner_prev[bias_id])}))
-                bias_id += 1
+                if l.coeff_vars is not None:
+                    print(len(gbplearner_prev), l)
+                    gbplearnerprev.layers.append(dotdict({'coeff_vars': dotdict(gbplearner_prev[coeff_id])}))
+                    coeff_id += 1
+                else:
+                    gbplearnerprev.layers.append(None)
             else:
                 gbplearnerprev.layers.append(None)
         gbplearner_prev = gbplearnerprev
@@ -427,6 +478,17 @@ def filtering_on_coeffs(gbplearner_prev: [GBPLearner, list, tuple],
             assert type(lay_old) is type(lay_new), \
                 "`gbplearner_prev` and `gbplearner_new` have different architectures."
         if hasattr(lay_new, 'coeff_vars'):
+            if lay_new.coeff_vars is None:
+                print(f"Layer of type {type(lay_new)} has coeff vars which are NoneType")
+                continue
+            if lay_old.coeff_vars.eta.shape != lay_new.coeff_vars.eta.shape:
+                print(f'Shape mismatch in coeff filtering: '
+                      f'{lay_old.coeff_vars.eta.shape} != {lay_new.coeff_vars.eta.shape}')
+                continue
+            if not hasattr(lay_new, 'coeff_prior_factor'):
+                print(f"Layer of type {type(lay_new)} does not have coeff prior factor")
+                continue
+            print(f'Doing coeff filtering for layer {lay_new}, {lay_new.coeff_vars.mu} {lay_old.coeff_vars.eta / lay_old.coeff_vars.Lambda}')
             # Get posterior marginals over coeffs
             # Rescale both the precision and info by specified factor (rescaling variance)
             posterior_eta = lay_old.coeff_vars.eta * prec_rescale_factor
@@ -447,13 +509,32 @@ def filtering_on_coeffs(gbplearner_prev: [GBPLearner, list, tuple],
             # lay_new.relinearise_factor_bias(lay_old.bias_vars.mu)
 
 
-def copy_linearisation_points(gbplearner_prev: GBPLearner,
-                              gbplearner_new: GBPLearner):
+def copy_linearisation_points(gbplearner_new: GBPLearner,
+                              to_copy: [list, tuple, None] = None,
+                              gbplearner_prev: [GBPLearner, None] = None):
     """
     Copies the value of the linearisation points from
     `gbplearner_prev` to `gbplearner_new`
     """
-    for lay_old, lay_new in zip(gbplearner_prev.layers, gbplearner_new.layers):
-        assert type(lay_old) is type(lay_new), \
-            "`gbplearner_prev` and `gbplearner_new` have different architectures."
-        lay_new.linearisation_points = lay_old.linearisation_points
+    assert to_copy is not None or gbplearner_prev is not None, \
+        "Must provide either old model or it's linearisation points."
+    if gbplearner_prev is None:
+        for lin_old, lay_new in zip(to_copy, gbplearner_new.layers):
+            to_copy_lay = lin_old
+            for tc in to_copy_lay:
+                for ttc in range(len(to_copy_lay[tc])):
+                    if to_copy_lay[tc][ttc].shape != lay_new.linearisation_points[tc][ttc].shape:
+                        print(to_copy_lay[tc][ttc].shape, lay_new.linearisation_points[tc][ttc].shape, 'Shape mismatch')
+                        to_copy_lay[tc][ttc] = lay_new.linearisation_points[tc][ttc]  # e.g. if batch size changes
+            lay_new.linearisation_points = to_copy_lay
+    else:
+        for lay_old, lay_new in zip(gbplearner_prev.layers, gbplearner_new.layers):
+            assert type(lay_old) is type(lay_new), \
+                "`gbplearner_prev` and `gbplearner_new` have different architectures."
+            to_copy_lay = lay_old.linearisation_points
+            for tc in to_copy_lay:
+                for ttc in range(len(to_copy_lay[tc])):
+                    if to_copy_lay[tc][ttc].shape != lay_new.linearisation_points[tc][ttc].shape:
+                        print(to_copy_lay[tc][ttc].shape, lay_new.linearisation_points[tc][ttc].shape, 'Shape mismatch')
+                        to_copy_lay[tc][ttc] = lay_new.linearisation_points[tc][ttc]  # e.g. if batch size changes
+            lay_new.linearisation_points = to_copy_lay

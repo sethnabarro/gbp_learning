@@ -30,8 +30,8 @@ class UnaryFactor(Factor):
             return E
 
     def _set_eta_Lambda(self):
-        self._eta = self.obs / self.sigma ** 2.
-        self._Lambda = tf.ones_like(self.obs) / self.sigma ** 2.
+        self._eta = self.obs * tf.ones(self.var_edges.shape) / self.sigma ** 2.
+        self._Lambda = tf.ones(self.var_edges.shape) / self.sigma ** 2.
 
     def get_eta_Lambda(self, conn_vars=None, **kwargs):
         if self.N_rob is not None:
@@ -47,14 +47,24 @@ class UnaryFactor(Factor):
     def update_outgoing_messages(self, conn_vars, **kw_msgs_in):
         """Unary, so don't need to deal with incoming messages"""
         eta, Lambda = self.get_eta_Lambda(conn_vars)
-        self.var_edges.fac_to_var_eta = eta
-        self.var_edges.fac_to_var_Lambda = Lambda
+        self.var_edges._fac_to_var_eta = eta
+        self.var_edges._fac_to_var_Lambda = Lambda
 
     def reset_eta_Lambda(self, eta_new, Lambda_new):
         self._eta = eta_new
         self._Lambda = Lambda_new
-        self.var_edges.fac_to_var_eta = eta_new
-        self.var_edges.fac_to_var_Lambda = Lambda_new
+        self._obs = self._eta / self._Lambda
+        self.update_outgoing_messages([None])
+
+    def get_edge_messages(self, named=False):
+        attr_to_get = 'named_state' if named else 'state'
+        if named:
+            return [(str(self.var_edges), getattr(self.var_edges, attr_to_get))]
+        else:
+            return [getattr(self.var_edges, attr_to_get)]
+
+    def set_edge_messages(self, edge_msgs):
+        self.var_edges.state = edge_msgs[0]
 
     @property
     def obs(self):
@@ -63,9 +73,26 @@ class UnaryFactor(Factor):
     @obs.setter
     def obs(self, new_obs):
         self._obs = new_obs
-        self.reset_eta_Lambda(new_obs / self.sigma ** 2.,
-                              tf.ones_like(new_obs) / self.sigma ** 2.)
-        self.update_outgoing_messages([None])
+
+    @property
+    def state(self):
+        st = [self.get_edge_messages()] + [self._obs, self._eta, self._Lambda]
+        return st
+
+    @state.setter
+    def state(self, new_state):
+        self.set_edge_messages(new_state[0])
+        self._obs = new_state[1]
+        self._eta = new_state[2]
+        self._Lambda = new_state[3]
+
+    @property
+    def named_state(self):
+        st = [('edges', self.get_edge_messages(named=True)),
+              ('obs', self.obs),
+              ('eta', self._eta),
+              ('Lambda', self._Lambda)]
+        return st
 
 
 class NonLinearUnaryFactor(NonLinearFactor, UnaryFactor):
@@ -101,3 +128,25 @@ class NonLinearUnaryFactor(NonLinearFactor, UnaryFactor):
 
     def set_edge_messages(self, edge_msgs):
         self.var_edges.state, = edge_msgs
+
+    @property
+    def state(self):
+        state = [self.var0, self.get_edge_messages(), self._obs, self._eta, self._Lambda]
+        return state
+
+    @state.setter
+    def state(self, new_state):
+        self.var0 = new_state[0]
+        self.set_edge_messages(new_state[1])
+        self._obs = new_state[2]
+        self._eta = new_state[3]
+        self._Lambda = new_state[4]
+
+    @property
+    def named_state(self):
+        st = [('var0', self.var0),
+              ('edges', self.get_edge_messages(named=True)),
+              ('obs', self._obs),
+              ('eta', self._eta),
+              ('Lambda', self._Lambda)]
+        return st

@@ -16,7 +16,8 @@ class GBPDenseLayer(GBPLayer):
                  coeff_vars: [CoeffVariable],
                  bias_prior_factor: [NonLinearUnaryFactor, UnaryFactor, None] = None,
                  bias_vars: [BiasVariable, None] = None,
-                 fixed_params: bool = False):
+                 fixed_params: bool = False,
+                 inverted: bool = False):
         super(GBPDenseLayer, self).__init__(input_vars=input_vars,
                                             coeff_vars=coeff_vars)
         self.weight_vars = weight_vars
@@ -29,11 +30,11 @@ class GBPDenseLayer(GBPLayer):
         self.weight_prior_factor = weight_prior_factor
         self.bias_prior_factor = bias_prior_factor
 
-        self.using_nonlinear_coeff_prior = hasattr(coeff_prior_factor, 'relin_freq') and coeff_prior_factor.relin_freq is not None
-        self.using_nonlinear_weight_prior = hasattr(weight_prior_factor, 'relin_freq') and weight_prior_factor.relin_freq is not None
+        self.using_nonlinear_coeff_prior = coeff_prior_factor.N_rob is not None
+        self.using_nonlinear_weight_prior = weight_prior_factor.N_rob is not None
         if self.use_bias:
             assert bias_prior_factor is not None, "Must provide `bias_prior_factor` if using bias vars"
-            self.using_nonlinear_bias_prior = hasattr(bias_prior_factor, 'relin_freq') and bias_prior_factor.relin_freq is not None
+            self.using_nonlinear_bias_prior = bias_prior_factor.N_rob is not None
         else:
             self.using_nonlinear_bias_prior = False
         self.fixed_params = fixed_params
@@ -41,8 +42,11 @@ class GBPDenseLayer(GBPLayer):
     def intra_layer_inference_iter(self, itr):
         # self.update_marginals()
         # self.relinearise_factors(itr)
+        # for _ in range(2):
         if not self.dense_factor.is_noiseless_input:
+            self.update_input_marginals()
             self.update_input_to_dense_factor_message()
+        self.update_coeff_marginals()
         self.update_coeff_to_dense_factor_message()
         self.update_dense_factor_to_variables_message()
         self.update_marginals()
@@ -54,21 +58,23 @@ class GBPDenseLayer(GBPLayer):
             self.update_weight_to_dense_factor_message()
             if self.use_bias:
                 self.update_bias_to_dense_factor_message()
-        if self.using_nonlinear_coeff_prior:
-            self.update_coeff_prior_factor_to_coeff_message()
-        if self.using_nonlinear_weight_prior:
-            self.update_weight_prior_factor_to_weight_message()
+        # if self.using_nonlinear_coeff_prior:
+        self.update_coeff_prior_factor_to_coeff_message()
+        # if self.using_nonlinear_weight_prior:
+        self.update_weight_prior_factor_to_weight_message()
+        self.bias_prior_factor.update_outgoing_messages(None)
         # self.update_marginals()
 
     def update_input_to_dense_factor_message(self):
         for mtype in ('eta', 'Lambda'):
             input_margs = getattr(self.input_vars, mtype)
             input_margs = tf.reshape(input_margs, [input_margs.shape[0], tf.reduce_prod(input_margs.shape[1:])])
+            if self.dense_factor.decompose:
+                input_margs = input_margs[..., None, :]
             outgoing = getattr(self.dense_factor.input_var_edges, f'fac_to_var_{mtype}')
-
             setattr(self.dense_factor.input_var_edges,
                     f'var_to_fac_{mtype}',
-                    input_margs[..., None, :] - outgoing)
+                    input_margs - outgoing)
 
     def update_weight_to_dense_factor_message(self):
         for mtype in ('eta', 'Lambda'):
@@ -111,9 +117,8 @@ class GBPDenseLayer(GBPLayer):
         state += [[self.bias_vars.eta, self.bias_vars.Lambda]] if self.use_bias else []
         state += [[self.coeff_vars.eta, self.coeff_vars.Lambda]]
         state.append(self.dense_factor.state)
-        if self.using_nonlinear_weight_prior:
-            state.append(self.weight_prior_factor.state)
-        if self.using_nonlinear_bias_prior:
+        state.append(self.weight_prior_factor.state)
+        if self.use_bias:
             state.append(self.bias_prior_factor.state)
         if self.using_nonlinear_coeff_prior:
             state.append(self.coeff_prior_factor.state)
@@ -132,16 +137,15 @@ class GBPDenseLayer(GBPLayer):
             lastvar_id += n_bias
         self.coeff_vars.eta, self.coeff_vars.Lambda = new_state[1 + lastvar_id]
         self.dense_factor.state = new_state.pop(2 + lastvar_id)
-        if self.using_nonlinear_weight_prior:
-            self.weight_prior_factor.state = new_state.pop(2 + lastvar_id)
-        if self.using_nonlinear_bias_prior:
+        self.weight_prior_factor.state = new_state.pop(2 + lastvar_id)
+        if self.use_bias:
             self.bias_prior_factor.state = new_state.pop(2 + lastvar_id)
         if self.using_nonlinear_coeff_prior:
             self.coeff_prior_factor.state = new_state.pop(2 + lastvar_id)
 
     @property
     def variables(self):
-        variables = () if self.dense_factor.is_noiseless_input else (self.input_vars,)
+        variables = (self.input_vars,)
         variables += (self.weight_vars,)
         variables += (self.bias_vars,) if self.use_bias else ()
         variables += (self.coeff_vars,)
@@ -162,9 +166,8 @@ class GBPDenseLayer(GBPLayer):
         state += [('bias_marginals', [self.bias_vars.eta, self.bias_vars.Lambda])] if self.use_bias else []
         state += [('coeff_marginals', [self.coeff_vars.eta, self.coeff_vars.Lambda])]
         state.append(('dense_factor', self.dense_factor.named_state))
-        if self.using_nonlinear_weight_prior:
-            state.append(('weight_prior_factor', self.weight_prior_factor.named_state))
-        if self.using_nonlinear_bias_prior:
+        state.append(('weight_prior_factor', self.weight_prior_factor.named_state))
+        if self.use_bias:
             state.append(('bias_prior_factor', self.bias_prior_factor.named_state))
         if self.using_nonlinear_coeff_prior:
             state.append(('coeff_prior_factor', self.coeff_prior_factor.named_state))
@@ -175,11 +178,12 @@ class GBPDenseLayer(GBPLayer):
         for mtype in ('eta', 'Lambda'):
             fac_to_var = getattr(self.dense_factor.input_var_edges, f'fac_to_var_{mtype}')
 
-            # Sum over output dim (have separate factor per output dim)
-            fac_to_var = tf.reduce_sum(fac_to_var, axis=-2)
+            if self.dense_factor.decompose:
+                # Sum over output dim (have separate factor per output dim)
+                fac_to_var = tf.reduce_sum(fac_to_var, axis=-2)
 
             # Reshape (for non-flattened input)
-            fac_to_var = tf.reshape(fac_to_var, self.input_shp)
+            fac_to_var = tf.reshape(fac_to_var, self.input_vars.shape)
 
             if return_eta_Lambda:
                 to_return.append(fac_to_var)

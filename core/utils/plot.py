@@ -1,11 +1,13 @@
 # coding=utf-8
 from matplotlib import cm
+from matplotlib import patches
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 import tensorflow as tf
 
-from core.inference.gbp.layers import GBPPoolLayer, GBPConvLayer, GBPDenseLayer, GBPSoftmaxClassObservationLayer
+from core.inference.gbp.layers import GBPPoolLayer, GBPConvLayer, GBPDenseLayer, \
+    GBPSoftmaxClassObservationLayer, GBPUpsampleLayer
 from core.utils.utils import match_edgenames_without_bs
 
 
@@ -17,7 +19,7 @@ def plot_model_coeffs(model, plot_dir, itr=None, max_imgs=None, y_class=None):
     max_imgs = max_imgs or batchsize
     in_determ = None
     for layid, lay in enumerate(model.layers):
-        if isinstance(lay, (GBPConvLayer, GBPPoolLayer)):
+        if isinstance(lay, (GBPConvLayer, GBPPoolLayer, GBPUpsampleLayer)):
             for i in range(min(max_imgs, batchsize)):
                 plot_coeffs_subplots(lay.coeff_vars.mu[i],
                                      itr=itr,
@@ -25,14 +27,14 @@ def plot_model_coeffs(model, plot_dir, itr=None, max_imgs=None, y_class=None):
                 plot_coeffs_subplots(lay.coeff_vars.sigma[i],
                                      itr=itr,
                                      plotfile=os.path.join(plot_dir, f'layer_{layid}', f'img_std_{i}.png'))
-                if hasattr(lay, 'use_feedforward_factor'):
-                    if lay.use_feedforward_factor:
-                        # lay.relinearise_factors(0)
-                        coeffs_determ = lay.filter_factor.forward_deterministic(in_determ)
-                        plot_coeffs_subplots(coeffs_determ[i],
-                                             itr=itr,
-                                             plotfile=os.path.join(plot_dir, f'layer_{layid}', f'img_{i}_determ.png'))
-                        in_determ = coeffs_determ
+                # if hasattr(lay, 'use_feedforward_factor'):
+                #     if lay.use_feedforward_factor:
+                #         # lay.relinearise_factors(0)
+                #         coeffs_determ = lay.filter_factor.forward_deterministic(in_determ)
+                #         plot_coeffs_subplots(coeffs_determ[i],
+                #                              itr=itr,
+                #                              plotfile=os.path.join(plot_dir, f'layer_{layid}', f'img_{i}_determ.png'))
+                #         in_determ = coeffs_determ
 
         elif isinstance(lay, GBPDenseLayer):
             plotfn = os.path.join(plot_dir, f'layer_{layid}', f'dense_inout_mu.png')
@@ -50,13 +52,86 @@ def plot_model_coeffs(model, plot_dir, itr=None, max_imgs=None, y_class=None):
                                     lay.coeff_vars.sigma,
                                     plotfn.replace('_mu.', '_std.'),
                                     y_class)
-            if in_determ is not None:
+            if layid > 0:
+                if in_determ is None:
+                    in_determ = model.layers[layid - 1].coeff_vars.mu
+                inp_mu_flat = tf.reshape(in_determ, [lay.input_vars.mu.shape[0], -1])
                 coeffs_determ = lay.dense_factor.forward_deterministic(in_determ)
                 plot_dense_input_output(inp_mu_flat,
                                         coeffs_determ,
                                         plotfn.replace('_mu.', '_determ.'),
                                         y_class)
                 in_determ = coeffs_determ
+
+
+def plot_generative(model, plot_dir, itr=None, max_imgs=None, n_samples=20, plot_samples=False):
+    """Plot deterministic transform in generative direction"""
+    def plot_img(arr, fn):
+        plt.imshow(arr)
+        plt.xticks([])
+        plt.yticks([])
+        plt.savefig(fn, dpi=300, bbox_inches='tight')
+        plt.close('all')
+    batchsize = model.layers[0].coeff_vars.mu.shape[0]
+    max_imgs = max_imgs or batchsize
+    in_determ_mu = None
+    in_determ_samples = None
+    for layid, lay in list(enumerate(model.layers))[::-1]:
+        if layid == 0:
+            if not hasattr(lay.filter_factor, 'forward_deterministic'):
+                continue
+            recons_mu = lay.filter_factor.forward_deterministic(in_determ_mu)
+            if plot_samples:
+                recons_samples = lay.filter_factor.forward_deterministic(in_determ_samples)
+                recons_samples = np.reshape(recons_samples, [n_samples] + list(recons_mu.shape))
+                recons_std = np.std(recons_samples, axis=0)
+            for i in range(min(max_imgs, batchsize)):
+                plot_coeffs_subplots(lay.pixel_obs_factor.obs[i],
+                                     itr=itr,
+                                     plotfile=os.path.join(plot_dir, f'layer_{layid}', f'input_img_{i}.png'))
+                plot_img(recons_mu[i], os.path.join(plot_dir, f'layer_{layid}', f'recon_img_{i}_itr{itr}.png'))
+                if plot_samples:
+                    plot_img(recons_std[i], os.path.join(plot_dir, f'layer_{layid}', f'recon_img_std_{i}_itr{itr}.png'))
+                    for j in range(3):
+                        plot_img(recons_samples[j, i], os.path.join(plot_dir, f'layer_{layid}', f'recon_sample{j}_img{i}_itr{itr}.png'))
+
+        if isinstance(lay, GBPConvLayer):
+            if lay.use_tpose_recon:
+                if in_determ_mu is None:
+                    in_determ_mu = lay.coeff_vars.mu
+                    in_determ_samples = lay.coeff_vars.mu[None] + lay.coeff_vars.sigma[None] * tf.random.normal(shape=[n_samples] + list(lay.coeff_vars.shape))
+                    in_determ_samples = tf.reshape(in_determ_samples, [-1] + list(lay.coeff_vars.shape[1:]))
+                coeffs_determ_mu = lay.filter_factor.forward_deterministic(in_determ_mu)
+                if plot_samples:
+                    coeffs_determ_samples = lay.filter_factor.forward_deterministic(in_determ_samples)
+                    coeffs_determ_std = np.std(np.reshape(coeffs_determ_samples, [n_samples] + list(lay.input_vars.shape)), axis=0)
+                for i in range(min(max_imgs, batchsize)):
+                    plot_coeffs_subplots(coeffs_determ_mu[i],
+                                         itr=itr,
+                                         plotfile=os.path.join(plot_dir, f'layer_{layid}', f'img_{i}_determ_gentive.png'))
+                    if plot_samples:
+                        plot_coeffs_subplots(coeffs_determ_std[i],
+                                             itr=itr,
+                                             plotfile=os.path.join(plot_dir, f'layer_{layid}', f'img_std_{i}_determ_gentive.png'))
+                in_determ_mu = coeffs_determ_mu
+                if plot_samples:
+                    in_determ_samples = coeffs_determ_samples
+
+        if isinstance(lay, GBPUpsampleLayer) and in_determ_mu is not None:
+            coeffs_determ_mu = lay.upsample_factor.forward_deterministic(in_determ_mu)
+            if plot_samples:
+                coeffs_determ_samples = lay.upsample_factor.forward_deterministic(in_determ_samples)
+                coeffs_determ_std = np.std(np.reshape(coeffs_determ_samples, [n_samples] + list(lay.input_vars.shape)), axis=0)
+            for i in range(min(max_imgs, batchsize)):
+                plot_coeffs_subplots(coeffs_determ_mu[i],
+                                     itr=itr,
+                                     plotfile=os.path.join(plot_dir, f'layer_{layid}', f'img_{i}_determ_gentive.png'))
+                in_determ_mu = coeffs_determ_mu
+                if plot_samples:
+                    plot_coeffs_subplots(coeffs_determ_std[i],
+                                         itr=itr,
+                                         plotfile=os.path.join(plot_dir, f'layer_{layid}', f'img_std_{i}_determ_gentive.png'))
+                    in_determ_samples = coeffs_determ_samples
 
 
 def plot_model_weights(model, plot_dir, itr=None):
@@ -137,16 +212,22 @@ def plot_model_diagnostics(model,
                            edge_stats=None,
                            plot_coeffs=True,
                            plot_weights=True,
+                           plot_generative_path=False,
                            plot_msg_convergence=True,
                            y_class=None):
     if plot_coeffs:
         print('Plotting coefficients.')
         plot_model_coeffs(model, plot_dir=os.path.join(plot_dir, 'coeffs'), itr=itr_str, max_imgs=3, y_class=y_class)
+    if plot_generative_path:
+        print('Plotting generative')
+        plot_generative(model, plot_dir=os.path.join(plot_dir, 'generative'), itr=itr_str, max_imgs=3)
     if plot_weights:
         print('Plotting weights.')
         plot_model_weights(model, plot_dir=os.path.join(plot_dir, 'weights'), itr=itr_str)
     if plot_msg_convergence:
-        has_msg = edge_stats is not None or model.layers[0].edges[0].msg_diffs is not None
+        has_msg = edge_stats is not None or \
+                  ((model.layers[0].edges[0].msg_diffs is not None) and
+                   (model.layers[0].edges[0].msg_diffs['var_to_fac_eta'].shape[0] > 0))
         if has_msg:
             print('Plotting message convergence.')
             plot_message_convergence(model,
@@ -155,6 +236,7 @@ def plot_model_diagnostics(model,
 
 
 def plot_denoising(img_corrupt, img_denoised, itr,
+                   img_mask=None,
                    title=None,
                    img=None,  # Clean
                    figsize=None,
@@ -183,6 +265,17 @@ def plot_denoising(img_corrupt, img_denoised, itr,
             cbar = f.colorbar(im, ax=ax, **cbar_args)
             if separate_plots:
                 cbar.ax.tick_params(labelsize=15)
+        if img_mask is not None:
+            lw = 0.4
+            mask_idx = np.where(tf.cast(img_mask[0], tf.float32) == 0.)
+            miny, maxy = np.min(mask_idx[0]), np.max(mask_idx[0])
+            minx, maxx = np.min(mask_idx[1]), np.max(mask_idx[1])
+            rect = patches.Rectangle((minx - 1, miny - 1),
+                                     maxx - minx + 1 + lw, maxy - miny + 1,
+                                     linewidth=lw, edgecolor='b', alpha=1.,
+                                     facecolor='none')
+            ax.add_patch(rect)
+
         return im
 
     title = title or ""
@@ -304,10 +397,9 @@ def plot_filters(filters, coeffs=None, filter_std=None, filters_init=None, itr=N
 
 def plot_dense_weights(weights, plotfile=None):
     imshow(weights)
-    plt.xticks([])
-    plt.yticks([])
+    plt.axis('off')
     plt.colorbar()
-    plt.savefig(plotfile, bbox_inches='tight')
+    plt.savefig(plotfile, dpi=300, bbox_inches='tight')
     plt.close('all')
 
 
@@ -350,7 +442,7 @@ def plot_coeffs(coeffs, itr=None, filter_id=None, plotfile=None):
 def plot_coeffs_subplots(coeffs, itr=None, plotfile=None):
     n_filts = coeffs.shape[-1]
     nr = int(np.ceil(np.sqrt(n_filts)))
-    nc = int(np.ceil(n_filts / nr))
+    nc = int(np.ceil((n_filts + 0.1) / nr))
 
     fig, axs = plt.subplots(nr, nc)
     if not isinstance(axs, (tuple, list, np.ndarray)):

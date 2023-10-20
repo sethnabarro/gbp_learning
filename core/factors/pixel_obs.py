@@ -1,6 +1,7 @@
 # coding=utf-8
 import tensorflow as tf
 
+from core.factors.base_nonlin import NonLinearFactor
 from core.factors.unary_factor import NonLinearUnaryFactor
 
 
@@ -38,9 +39,26 @@ class PixelObservationFactor(NonLinearUnaryFactor):
             # Weaken messages from mask region. WIll be zero if self.mask_prec == 0.
             bmask = tf.cast(self.mask, tf.bool)
             Lambda = tf.where(bmask, Lambda, self.mask_prec)
-            eta = tf.where(bmask, eta, self.obs * self.mask_prec)
+            eta = tf.where(bmask, eta, self.mask_prec * self.obs)
         self.var_edges.fac_to_var_eta = eta
         self.var_edges.fac_to_var_Lambda = Lambda
+
+    # def get_eta_Lambda(self, conn_vars=None, **kwargs):
+    #     if self.N_rob is not None:
+    #         # E = self.energy(self.var0, robust=False, aggregate=False)
+    #         # k = self.get_k_robust(E)
+    #         # k = tf.where(tf.math.is_nan(k), 1., k)  # where E == 0.
+    #         # eta = tf.where(k >= 1., self._eta, self._eta * 1e-2)
+    #         # Lambda = tf.where(k >= 1., self._Lambda, self._Lambda * 1e-2)
+    #         # return eta, Lambda
+    #         diff = self.var0[0] - self.obs
+    #         s = tf.where(tf.sign(diff) == 0., 1., tf.sign(diff))
+    #         J = tf.where(tf.abs(diff) > 0.02, s * 0.005, s)
+    #         eta = J * (J * self.var0[0] - tf.clip_by_value(tf.abs(diff), 0., 0.02 - 0.02 * 0.005 + 0.005 * tf.abs(diff))) / self.sigma ** 2.
+    #         Lambda = J ** 2. / self.sigma ** 2.
+    #         return eta, Lambda
+    #     else:
+    #         return self._eta, self._Lambda
 
     def energy(self, conn_vars, robust=None, aggregate=True):
         E = super().energy(conn_vars, aggregate=False, robust=robust)
@@ -57,3 +75,16 @@ class PixelObservationFactor(NonLinearUnaryFactor):
             return tf.reduce_sum(E)
         else:
             return E
+
+    @property
+    def state(self):
+        return [self.var0, self.get_edge_messages(), self._obs, self._eta, self._Lambda]
+
+    @state.setter
+    def state(self, new_state):
+        self.var0 = new_state[0]
+        self.set_edge_messages(new_state[1])
+        self._obs = new_state[2]
+        self._eta = new_state[3]
+        self._Lambda = new_state[4]
+        self.update_outgoing_messages([None])

@@ -18,9 +18,7 @@ class FeedforwardFilterFactor(AdditiveFilterFactorSumDecomp):
 
     def _get_incoming_messages(self):
         edges = (('inputs', self.input_var_edges),) if not self.fixed_inputs else ()
-        if self.use_component_vars:
-            edges += (('components', self.component_var_edges),)
-        elif not self.fixed_params:
+        if not self.fixed_params:
             edges += (('filters', self.filter_var_edges),)
         edges += (('coeffs', self.coeff_var_edges),)
         if self.use_bias and not self.fixed_params:
@@ -93,21 +91,15 @@ class FeedforwardFilterFactor(AdditiveFilterFactorSumDecomp):
             # varstack = tf.concat([varstack, bias_patch], axis=-1)
         return tf.concat(to_stack, axis=-1)
 
-    def get_eta_J(self, conn_vars):
-        if self.use_component_vars:
-            return self._get_eta_J_components(conn_vars)
-        else:
-            return self._get_eta_J_filter_coeffs(conn_vars)
-
     def conv2d(self, inputs, filters):
         """Using tf.nn.conv2d() raises warning with static graph mode, write out conv"""
         ksize = filters.shape[0]
         filters_flat = flatten_filters(filters)
         img_patches = patchify_image(inputs, ksize_x=ksize, stride=self.stride)
-        conv_pre_act = tf.einsum('abc,efgac->efgb', filters_flat, img_patches)
+        conv_pre_act = tf.einsum('...abc,...efgac->...efgb', filters_flat, img_patches)
         return conv_pre_act
 
-    def _get_eta_J_filter_coeffs(self, conn_vars):
+    def get_eta_J(self, conn_vars):
         filters, inputs_mu, coeffs = self.var0[:3]   # Covers case both with and without bias
         if self.use_bias:
             bias = self.var0[3]
@@ -163,18 +155,14 @@ class FeedforwardFilterFactor(AdditiveFilterFactorSumDecomp):
 
         factor_eta, factor_J = self.get_eta_J(conn_vars)
 
-        # factor_plus_mess_eta = var_msg_in_eta + factor_eta
-        # factor_Lambda = factor_J[..., None, :] * factor_J[..., None] / self.sigma ** 2.
-        # factor_plus_mess_Lambda = factor_Lambda + tf.linalg.diag(var_msg_in_Lambda)
-        tf.assert_greater(var_msg_in_Lambda, 0., f'Lam in neg, {var_msg_in_Lambda.shape}')
-        # factor_to_var_eta, factor_to_var_Lambda = self.marginalise(factor_plus_mess_eta, factor_plus_mess_Lambda, factor_eta, factor_Lambda)
-
         # Marginalisation
         factor_to_var_eta, factor_to_var_Lambda = \
-            self.marginalise_sherman_morrison(var_msg_in_eta,
-                                              factor_eta,
-                                              var_msg_in_Lambda,
-                                              factor_J / self.sigma)
+            self.marginalise_sherman_morrison(tf.cast(var_msg_in_eta, tf.float64),
+                                              tf.cast(factor_eta, tf.float64),
+                                              tf.cast(var_msg_in_Lambda, tf.float64),
+                                              tf.cast(factor_J / self.sigma, tf.float64))
+        factor_to_var_eta = tf.cast(factor_to_var_eta, tf.float32)
+        factor_to_var_Lambda = tf.cast(factor_to_var_Lambda, tf.float32)
         self.update_outgoing_edge_messages(factor_to_var_eta, factor_to_var_Lambda)
 
     def update_outgoing_edge_messages(self, factor_to_var_eta, factor_to_var_Lambda):
@@ -183,7 +171,7 @@ class FeedforwardFilterFactor(AdditiveFilterFactorSumDecomp):
         ninps = int(not self.fixed_inputs) * ks2 * nin_chan  # Number of input vars connected to factor
         nfilt = int(not self.fixed_params) * nin_chan * ks2  # Number of filter variables (used to reconstruct 1 pixel)
         ncoeff = self.n_filt
-        nbias = int(self.use_bias)
+        nbias = int(self.use_bias and not self.fixed_params)
 
         def reshape(x):
             x = tf.reshape(x, x.shape.as_list()[:-1] + [nin_chan, ks2])

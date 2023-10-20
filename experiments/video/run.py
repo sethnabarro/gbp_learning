@@ -75,13 +75,13 @@ def main():
 
     def eval_fn(model, train_itr, train_batch_id, args_test=None, test_data=None):
         to_prepend = [train_batch_id, train_itr]
-        psnr, ll = denoise_eval(denoised=model.layers[0].input_vars,
+        psnr, ll, mse = denoise_eval(denoised=model.layers[0].input_vars,
                                 frame_clean=train_data_clean[train_batch_id],
                                 crop_border=conf.eval_crop_border)
-        psnr_masked, ll_masked = \
+        psnr_masked, ll_masked, mse_masked = \
             denoise_eval(denoised=model.layers[0].input_vars,
                          frame_clean=train_data_clean[train_batch_id],
-                         mask=corr_mask[train_batch_id:train_batch_id + 1],
+                         mask=corr_mask[train_batch_id:train_batch_id + 1, ..., None],
                          crop_border=conf.eval_crop_border)
         create_or_concat_npy(arr=[to_prepend + [psnr.numpy(),
                                                 ll.numpy(),

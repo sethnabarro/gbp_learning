@@ -15,7 +15,7 @@ class GBPSoftmaxClassObservationLayer(GBPLayer):
                                                               coeff_vars=None)
         self.softmax_factor = softmax_factor
 
-    def _update_input_marginals(self, return_eta_Lambda=False):
+    def _update_input_marginals(self, return_eta_Lambda=False, **kwargs):
         eta = self.softmax_factor.logit_var_edges.fac_to_var_eta
         Lambda = self.softmax_factor.logit_var_edges.fac_to_var_Lambda
 
@@ -25,7 +25,7 @@ class GBPSoftmaxClassObservationLayer(GBPLayer):
             self.input_vars.eta = eta
             self.input_vars.Lambda = Lambda
 
-    def _update_coeff_marginals(self, return_eta_Lambda=False):
+    def _update_coeff_marginals(self, return_eta_Lambda=False, **kwargs):
         raise AttributeError('Softmax layer has no coefficient (output) variables')
 
     def intra_layer_inference_iter(self, itr):
@@ -46,7 +46,7 @@ class GBPSoftmaxClassObservationLayer(GBPLayer):
     def update_factor_to_input_vars_message(self):
         self.softmax_factor.update_outgoing_messages(self.softmax_factor.var0)
 
-    def update_marginals(self):
+    def update_marginals(self, **kwargs):
         self.update_input_marginals()
 
     def energy(self, logits=None, robust=None, as_numpy=False, sum_all=False):

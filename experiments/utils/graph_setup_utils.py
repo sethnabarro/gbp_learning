@@ -1,24 +1,22 @@
 # coding=utf-8
-"""Functions which build some components of the graph and initialise messages for reconstruction factors"""
-from copy import deepcopy
+"""
+Initialises the graph from the config.
+Creates variables, factors and edges.
+Initialises the edge messages
+"""
 import numpy as np
 import tensorflow as tf
 from typing import Iterable
 
 from core.edge import Edge
-from core.factors import UnaryFactor, NonLinearUnaryFactor, AdditiveFilterFactor, AdditiveFilterFactorDecomp,\
-    AdditiveFilterFactorSum, AdditiveFilterFactorSumDecomp, ComponentFactor, PixelObservationFactor, \
-    PairwiseSmoothingFactorDecomp, SegmentationObservationFactor, SoftmaxSegmentationObservationFactor, \
-    AdditiveFilterFactorSumPixel, AvgPoolFactor, MaxPoolFactor, DenseFactor, SoftmaxClassObservationFactor, \
-    FeedforwardFilterFactor, BinaryClassObservationFactor, BinarySegmentationObservationFactor
-from core.inference import BatchLearner
+from core.factors import UnaryFactor, NonLinearUnaryFactor, PixelObservationFactor, \
+    PairwiseSmoothingFactorDecomp, AdditiveFilterFactorSumTpose, AvgPoolFactor, MaxPoolFactor, \
+    DenseFactor, SoftmaxClassObservationFactor, FeedforwardFilterFactor, UpsampleFactor
 from core.inference.gbp.learner import GBPLearner, filtering_on_weights, filtering_on_biases, filtering_on_coeffs, copy_linearisation_points
-from core.inference.gbp.layers import GBPConvLayer, GBPPoolLayer, GBPDenseLayer, GBPBinaryClassObservationLayer,\
-    GBPSoftmaxClassObservationLayer, GBPSegmentationObservationLayer
-from core.variables import PixelVariable, FilterVariable, CoeffVariable, ComponentVariable, SegmentationVariable, BiasVariable, WeightVariable
+from core.inference.gbp.layers import GBPConvLayer, GBPPoolLayer, GBPDenseLayer, \
+    GBPSoftmaxClassObservationLayer, GBPUpsampleLayer, GBPInputObsLayer, GBPRegressionObsLayer
+from core.variables import PixelVariable, FilterVariable, CoeffVariable, BiasVariable, WeightVariable
 from core.utils.utils import get_n_strides, patchify_image, dotdict, get_init_conv_weights, get_init_dense_weights, match_edgenames_without_bs
-
-from nn import get_neural_net, get_nn_optimiser, get_nn_loss
 
 
 def init_recon_edge_messages(img_in,
@@ -30,22 +28,16 @@ def init_recon_edge_messages(img_in,
                              coeff_pad=None,
                              inputvars=None,
                              pixel_obs_factor=None,
-                             segmentation_obs_factor: [SegmentationObservationFactor, None] = None,
-                             segmentation_prior_factor: [UnaryFactor, None] = None,
-                             component_prior_factor=None,
                              coeff_prior_factor=None,
                              bias_prior_factor=None,
                              use_decomp_filtfac=True,
                              use_feedforward_filtfac=False,
                              use_sum_filtfac=True,
-                             use_component_vars=False,
-                             use_bias=False,
-                             colour=False):
+                             use_bias=False):
     coeff_pad = coeff_pad or 0
     is_first_layer = pixel_obs_factor is not None
-    is_per_pixel_recon = isinstance(filter_factor, AdditiveFilterFactorSumPixel)
+    is_tpose_recon = isinstance(filter_factor, AdditiveFilterFactorSumTpose)
     is_pairwise_smoother = isinstance(filter_factor, PairwiseSmoothingFactorDecomp)
-    n_seg_channels = 0 if segmentation_prior_factor is None else segmentation_prior_factor.var_edges.fac_to_var_eta.shape[-1]
 
     if is_first_layer:
         n_strides_x, n_strides_y = get_n_strides(img_in=inputvars.mu,
@@ -61,72 +53,62 @@ def init_recon_edge_messages(img_in,
             raise ValueError('`inputvars` must be given to initialise hidden layers')
 
     n_channels_in = inputvars.shape[-1]
-    if is_first_layer:
-        n_channels_in += n_seg_channels
 
     edges_shp = \
         [inputvars.shape[0],  # Batch size
-         inputvars.shape[1] if is_per_pixel_recon else n_strides_y,
-         inputvars.shape[2] if is_per_pixel_recon else n_strides_x,
+         inputvars.shape[1] if is_tpose_recon else n_strides_y,
+         inputvars.shape[2] if is_tpose_recon else n_strides_x,
          n_channels_in,
          1 if is_pairwise_smoother else filter_vars.n_filters,
          filter_vars.k_size ** 2]
 
     if not is_pairwise_smoother:
-        if use_component_vars:
-            comp_prior_eta, comp_prior_Lambda = component_prior_factor.get_eta_Lambda()
-            filter_factor.component_var_edges._var_to_fac_eta = comp_prior_eta
-            filter_factor.component_var_edges._var_to_fac_Lambda = comp_prior_Lambda
-            filter_factor.component_var_edges._fac_to_var_eta = tf.zeros(edges_shp)
-            filter_factor.component_var_edges._fac_to_var_Lambda = tf.zeros(edges_shp)
-        else:
-            # filter prior not robust so don't need to give current value to get eta lambda
-            filtprior_eta, filtprior_Lambda = filter_prior_factor.get_eta_Lambda()
-            filter_prior_eta_bc = tf.broadcast_to(filtprior_eta[None, None, None], edges_shp)
-            filter_prior_Lambda_bc = tf.broadcast_to(filtprior_Lambda[None, None, None], edges_shp)
-            if is_per_pixel_recon:
-                filter_prior_eta_bc *= tf.transpose(filter_factor.filter_mask, (0, 1, 2, 3, 5, 4))
-                filter_prior_Lambda_bc *= tf.transpose(filter_factor.filter_mask, (0, 1, 2, 3, 5, 4))
-            filter_factor.filter_var_edges._var_to_fac_eta = filter_prior_eta_bc
-            filter_factor.filter_var_edges._var_to_fac_Lambda = filter_prior_Lambda_bc
-            filter_factor.filter_var_edges._fac_to_var_eta = tf.zeros(edges_shp)
-            filter_factor.filter_var_edges._fac_to_var_Lambda = tf.zeros(edges_shp)
+        # filter prior not robust so don't need to give current value to get eta lambda
+        filtprior_eta, filtprior_Lambda = filter_prior_factor.get_eta_Lambda()
+        filter_prior_eta_bc = tf.broadcast_to(filtprior_eta[None, None, None], edges_shp)
+        filter_prior_Lambda_bc = tf.broadcast_to(filtprior_Lambda[None, None, None], edges_shp)
+        filter_factor.filter_var_edges._var_to_fac_eta = filter_prior_eta_bc
+        filter_factor.filter_var_edges._var_to_fac_Lambda = filter_prior_Lambda_bc
+        filter_factor.filter_var_edges._fac_to_var_eta = tf.zeros(edges_shp)
+        filter_factor.filter_var_edges._fac_to_var_Lambda = tf.zeros(edges_shp)
 
-            if use_filter_coeffs:
-                coeff_edge_shp = edges_shp.copy()
-                if use_feedforward_filtfac:
-                    coeff_edge_shp = edges_shp[:-3] + [filter_vars.n_filters]
-                # coeff_edge_shp.pop(3)
-                if not use_decomp_filtfac:
-                    coeff_edge_shp = coeff_edge_shp[:-1] + [1]
-                if is_per_pixel_recon:
-                    def coeff_bc(x, pdv=0):
-                        xypad = filter_vars.k_size // 2 * 2
-                        x = tf.pad(x, [[0, 0], [xypad, xypad], [xypad, xypad], [0, 0], [0, 0]], constant_values=pdv)
-                        #TODO: not sure about [..., 0] below
-                        xpatch = patchify_image(x[..., 0], ksize_x=filter_vars.k_size, stride=stride)
-                        return tf.broadcast_to(xpatch[..., None, :, :], coeff_edge_shp)
-                else:
-                    def coeff_bc(x, pdv=None):
-                        if use_feedforward_filtfac:
-                            return x
-                        else:
-                            return tf.broadcast_to(x[..., None, :, None], coeff_edge_shp)
+        if use_filter_coeffs:
+            coeff_edge_shp = edges_shp.copy()
+            if use_feedforward_filtfac:
+                coeff_edge_shp = edges_shp[:-3] + [filter_vars.n_filters]
+            if not use_decomp_filtfac:
+                coeff_edge_shp = coeff_edge_shp[:-1] + [1]
+            if is_tpose_recon:
+                def coeff_bc(x, pdv=0.):
+                    xypad = filter_vars.k_size // 2 * 2
+                    x = tf.pad(x, [[0, 0], [xypad, xypad], [xypad, xypad], [0, 0]], constant_values=pdv)
+                    xpatch = patchify_image(x, ksize_x=filter_vars.k_size, stride=stride)
+                    return tf.broadcast_to(xpatch[..., None, :, :], coeff_edge_shp)
+            else:
+                def coeff_bc(x, pdv=None):
+                    if use_feedforward_filtfac:
+                        return x
+                    else:
+                        return tf.broadcast_to(x[..., None, :, None], coeff_edge_shp)
 
-                coeff_pri_eta = coeff_prior_factor.var_edges.fac_to_var_eta
-                coeff_pri_Lambda = coeff_prior_factor.var_edges.fac_to_var_Lambda
-                coeff_edge_eta = coeff_bc(coeff_pri_eta if coeff_pad == 0 else coeff_pri_eta[:, coeff_pad:-coeff_pad, coeff_pad:-coeff_pad])
-                coeff_edge_Lambda = coeff_bc(coeff_pri_Lambda if coeff_pad == 0 else coeff_pri_Lambda[:, coeff_pad:-coeff_pad, coeff_pad:-coeff_pad])
-                filter_factor.coeff_var_edges._var_to_fac_eta = coeff_edge_eta
-                filter_factor.coeff_var_edges._var_to_fac_Lambda = coeff_edge_Lambda
-                filter_factor.coeff_var_edges._fac_to_var_eta = tf.zeros(coeff_edge_shp)
-                filter_factor.coeff_var_edges._fac_to_var_Lambda = tf.zeros(coeff_edge_shp)
+            coeff_pri_eta = coeff_prior_factor.var_edges.fac_to_var_eta
+            coeff_pri_Lambda = coeff_prior_factor.var_edges.fac_to_var_Lambda
+            coeff_edge_eta = coeff_bc(coeff_pri_eta if coeff_pad == 0 else coeff_pri_eta[:, coeff_pad:-coeff_pad, coeff_pad:-coeff_pad])
+            coeff_edge_Lambda = coeff_bc(coeff_pri_Lambda if coeff_pad == 0 else coeff_pri_Lambda[:, coeff_pad:-coeff_pad, coeff_pad:-coeff_pad], pdv=1e-2)
+            filter_factor.coeff_var_edges._var_to_fac_eta = coeff_edge_eta
+            filter_factor.coeff_var_edges._var_to_fac_Lambda = coeff_edge_Lambda
+            filter_factor.coeff_var_edges._fac_to_var_eta = tf.zeros(coeff_edge_shp)
+            filter_factor.coeff_var_edges._fac_to_var_Lambda = tf.zeros(coeff_edge_shp)
 
         if use_bias:
             bias_edge_shp = edges_shp.copy()
             bias_edge_shp.pop(4)   # One bias for all filters
             if use_feedforward_filtfac:
                 bias_edge_shp = bias_edge_shp[:3] + [filter_vars.n_filters]
+                eta_expand = bias_prior_factor.var_edges.fac_to_var_eta[None, None, None]
+                Lambda_expand = bias_prior_factor.var_edges.fac_to_var_Lambda[None, None, None]
+            elif is_tpose_recon:
+                bias_edge_shp = bias_edge_shp[:3] + [n_channels_in]
                 eta_expand = bias_prior_factor.var_edges.fac_to_var_eta[None, None, None]
                 Lambda_expand = bias_prior_factor.var_edges.fac_to_var_Lambda[None, None, None]
             else:
@@ -151,16 +133,6 @@ def init_recon_edge_messages(img_in,
         input_eta = pixel_obs_factor.var_edges.fac_to_var_eta
         input_Lambda = pixel_obs_factor.var_edges.fac_to_var_Lambda
 
-    if segmentation_prior_factor is not None:
-        # Append segmentation channel params to pixel variable params
-        seg_eta = segmentation_prior_factor.var_edges.fac_to_var_eta
-        seg_Lambda = segmentation_prior_factor.var_edges.fac_to_var_Lambda
-        if segmentation_obs_factor is not None:
-            seg_eta += segmentation_obs_factor.var_edges.fac_to_var_eta
-            seg_Lambda += segmentation_obs_factor.var_edges.fac_to_var_Lambda
-        input_eta = tf.concat((input_eta, seg_eta), axis=-1)
-        input_Lambda = tf.concat((input_Lambda, seg_Lambda), axis=-1)
-
     eta_patches = patchify_image(input_eta,
                                  ksize_x=filter_vars.k_size,
                                  stride=stride)
@@ -184,14 +156,14 @@ def init_recon_edge_messages(img_in,
 
     pixel_edges_shp = edges_shp.copy()
 
-    if use_decomp_filtfac and not is_per_pixel_recon:
+    if use_decomp_filtfac and not is_tpose_recon:
         pixel_edges_shp += (2,) if filter_factor.relative_to_centre else (1,)
     bc = tf.broadcast_to
     if use_feedforward_filtfac:
         pixel_edges_shp = pixel_edges_shp[:-1]
         eta_patches = eta_patches[..., None, :]
         Lambda_patches = Lambda_patches[..., None, :]
-    elif is_per_pixel_recon:
+    elif is_tpose_recon:
         pixel_edges_shp.pop(5)
         pixel_edges_shp.pop(4)
     elif use_sum_filtfac:
@@ -200,8 +172,8 @@ def init_recon_edge_messages(img_in,
     else:
         eta_patches = eta_patches[..., None, :, :]
         Lambda_patches = Lambda_patches[..., None, :, :]
-    pixel_to_factor_eta = bc(input_eta if is_per_pixel_recon else eta_patches, pixel_edges_shp)
-    pixel_to_factor_Lambda = bc(input_Lambda if is_per_pixel_recon else Lambda_patches, pixel_edges_shp)
+    pixel_to_factor_eta = bc(input_eta if is_tpose_recon else eta_patches, pixel_edges_shp)
+    pixel_to_factor_Lambda = bc(input_Lambda if is_tpose_recon else Lambda_patches, pixel_edges_shp)
     filter_factor.input_var_edges._var_to_fac_eta = pixel_to_factor_eta
     filter_factor.input_var_edges._var_to_fac_Lambda = pixel_to_factor_Lambda
     filter_factor.input_var_edges._fac_to_var_eta = tf.zeros(pixel_edges_shp)
@@ -301,15 +273,101 @@ def init_pool_layer(input_vars: [CoeffVariable, PixelVariable],
                         input_vars=input_vars)
 
 
+def init_upsample_layer(input_vars: [CoeffVariable, PixelVariable],
+                        upsample_factor_config: dotdict,
+                        coeff_prior_factor_config: dotdict,
+                        momentum: float,
+                        dropout: float = 0.,
+                        coeff_init_seed: int = 643,
+                        coeff_init_std: float = 1.,
+                        layer_prev: [None, GBPUpsampleLayer] = None) -> GBPUpsampleLayer:
+    is_reinit = layer_prev is not None
+
+    # What is output shape?
+    ks = upsample_factor_config.ksize
+    inshp = input_vars.shape
+    assert (inshp[1] % ks == 0) and (inshp[2] % ks == 0), \
+        f"Upsample layer init: input must divide by kernel size exactly. " \
+        f"Ksize = {ks}, input_shp = {inshp}"
+    outshp = [inshp[0], int(inshp[1] / ks), int(inshp[2] / ks), inshp[3]]
+    outedge_shp = outshp + [ks ** 2]
+    edge_kwargs = dict(momentum=momentum) #, dropout=dropout)
+
+    # Create edges to input vars
+    inedge_shp = outedge_shp
+    fac_to_invar_eta = tf.zeros(inedge_shp)
+    fac_to_invar_Lambda = tf.zeros(inedge_shp)
+    invar_to_fac_eta = tf.zeros(inedge_shp)
+    invar_to_fac_Lambda = tf.zeros(inedge_shp)
+    invar_edges = Edge(var_to_fac_eta=invar_to_fac_eta,
+                       var_to_fac_Lambda=invar_to_fac_Lambda,
+                       fac_to_var_eta=fac_to_invar_eta,
+                       fac_to_var_Lambda=fac_to_invar_Lambda,
+                       name='input_upsample_edge',
+                       **edge_kwargs)
+
+    # Create edges to output vars
+    fac_to_outvar_eta = tf.zeros(outedge_shp)
+    fac_to_outvar_Lambda = tf.zeros(outedge_shp)
+    outvar_to_fac_eta = tf.zeros(outedge_shp)
+    outvar_to_fac_Lambda = tf.ones(outedge_shp) / coeff_prior_factor_config.sigma ** 2.
+    outvar_edges = Edge(var_to_fac_eta=outvar_to_fac_eta,
+                        var_to_fac_Lambda=outvar_to_fac_Lambda,
+                        fac_to_var_eta=fac_to_outvar_eta,
+                        fac_to_var_Lambda=fac_to_outvar_Lambda,
+                        name='output_upsample_edge',
+                        **edge_kwargs)
+
+    outvar_prior_edges = Edge(var_to_fac_eta=tf.zeros(outshp),
+                              var_to_fac_Lambda=tf.zeros(outshp),
+                              fac_to_var_eta=tf.zeros(outshp),
+                              fac_to_var_Lambda=tf.ones(outshp) / coeff_prior_factor_config.sigma ** 2.,
+                              name='output_prior_edge',
+                              **edge_kwargs)
+
+    outvar_prior_factor = NonLinearUnaryFactor(var_edges=outvar_prior_edges,
+                                               sigma=coeff_prior_factor_config.sigma,
+                                               obs=tf.zeros(outshp),
+                                               N_rob=coeff_prior_factor_config.N_rob,
+                                               rob_type=coeff_prior_factor_config.rob_type,
+                                               kmult=coeff_prior_factor_config.kmult,
+                                               relin_freq=coeff_prior_factor_config.relin_freq,
+                                               init_lin_point=tf.zeros(outshp))
+
+    upsample_factor = UpsampleFactor(sigma=upsample_factor_config.sigma,
+                                     input_var_edges=invar_edges,
+                                     output_var_edges=outvar_edges,
+                                     N_rob=upsample_factor_config.N_rob,
+                                     rob_type=upsample_factor_config.rob_type,
+                                     kmult=upsample_factor_config.kmult)
+
+    # Create output vars
+    coeff_init = tf.random.stateless_normal(shape=outshp, seed=[coeff_init_seed - 1, coeff_init_seed]) * coeff_init_std
+    outvars = CoeffVariable(mu_init=coeff_init,
+                            sigma_init=tf.ones(outshp))
+    invar_mu = tf.keras.layers.UpSampling2D(size=(upsample_factor.ksize, upsample_factor.ksize))(outvars.mu)
+    input_vars.eta = invar_mu / input_vars.sigma ** 2.
+
+    if is_reinit:
+        layer_prev.pool_factor = upsample_factor
+        layer_prev.input_vars = input_vars
+        layer_prev.coeff_vars = outvars
+        return layer_prev
+
+    return GBPUpsampleLayer(input_vars=input_vars,
+                            coeff_vars=outvars,
+                            upsample_factor=upsample_factor,
+                            coeff_prior_factor=outvar_prior_factor)
+
+
 def init_conv_layer(filters_init, config, n_filts,
                     img_noisy=None, inputvars=None,
                     img_gt=None, layer_id=0,
                     coeff_init=None, pix_init=None,
-                    img_mask=None, seg_labels=None, ksize=3, stride=1,
+                    img_mask=None, ksize=3, stride=1,
                     coeff_init_seed=999, padding=None, coeff_padding=None,
                     fac_to_var_chunksize=1, layer_prev=None) -> GBPConvLayer:
     is_first_layer = layer_id == 0
-    doing_segmentation = seg_labels is not None or config.experiment.n_seg_classes is not None
     if not is_first_layer:
         if inputvars is None:
             raise ValueError('`inputvars` should be given when initialising hidden layers.')
@@ -374,15 +432,7 @@ def init_conv_layer(filters_init, config, n_filts,
     bias_filter_fac_edge = None
     if config.factors.recon.use_bias:
         assert config.factors.recon.sum_filters, "Bias currently only supported with sum filter recon factors"
-        seg_channels = 0
-        if doing_segmentation and is_first_layer:
-            if config.experiment.n_seg_classes is not None:
-                seg_channels = 1 if config.factors.segmentation_obs.two_class else config.experiment.n_seg_classes
-            elif seg_labels.shape[:-1] == img_noisy.shape[:-1]:  # Dense labels
-                seg_channels = seg_labels.shape[-1]
-            else:  # Sparse labels
-                seg_channels = len(np.unique(seg_labels[:, -1]))
-        biasshp = [n_filts] if config.factors.recon.feedforward else [inputvars.shape[-1] + seg_channels]
+        biasshp = [n_filts] if config.factors.recon.feedforward else [inputvars.shape[-1]]
 
         biasvars = BiasVariable(mu_init=tf.ones(biasshp) * config.factors.bias_prior.mean,
                                 sigma_init=config.factors.bias_prior.sigma)
@@ -407,7 +457,6 @@ def init_conv_layer(filters_init, config, n_filts,
     if config.use_filter_coeffs:
         nx, ny = get_n_strides(img_in=inputvars.mu, stride=config.factors.recon.stride, ksize=ksize)
         coeffshp = [inputvars.shape[0], ny + 2 * coeff_padding, nx + 2 * coeff_padding, n_filts]
-        print('coeff seed', coeff_init_seed)
         if coeff_init is None:
             if config.random_coeff_init:
                 coeff_var_init = tf.random.stateless_normal(shape=coeffshp, seed=[coeff_init_seed - 1, coeff_init_seed]) * config.init_coeff_std
@@ -444,19 +493,11 @@ def init_conv_layer(filters_init, config, n_filts,
         coeffvars = None
         coeff_filter_fac_edge = None
         coeff_prior_factor = None
-        non_zero_weight_norm_factor = None
 
     filters_flat = filtervars.mu_flat
     filters_init = filtervars.mu
     filter_prior_mean = filters_flat if config.factors.weight_prior.random_mean else tf.zeros_like(filters_flat)
     filter_prior_sigma = config.factors.weight_prior.sigma
-    if doing_segmentation and config.factors.segment_weight_prior is not None and is_first_layer:
-        if config.factors.segment_weight_prior.sigma is not None:
-            n_pix_channels = pix_mu_init.shape[-1]
-            n_seg_channels = 1 if config.factors.segmentation_obs.two_class else config.experiment.n_seg_classes
-            filter_prior_sigma = [config.factors.weight_prior.sigma] * n_pix_channels + \
-                [config.factors.segment_weight_prior.sigma] * n_seg_channels
-            filter_prior_sigma = tf.convert_to_tensor(filter_prior_sigma)[:, None, None]
 
     filter_prior_edge = Edge(var_to_fac_eta=tf.zeros_like(filter_prior_mean),
                              var_to_fac_Lambda=tf.zeros_like(filter_prior_mean),
@@ -472,98 +513,9 @@ def init_conv_layer(filters_init, config, n_filts,
         layer_prev.filter_prior_factor = filter_prior_factor
         layer_prev.filter_prior_factor.var_edges = filter_prior_edge
 
-    segmentvars = None
-    segment_obs_factor = None
-    segment_prior_factor = None
     if is_first_layer:
-        if doing_segmentation:
-            have_seg_obs = seg_labels is not None
-            inshp = [s - padding if i in (1, 2) else s for i, s in enumerate(inputvars.shape[:-1])]
-            seg_labels_is_dense = seg_labels.shape[:-1] == inshp if have_seg_obs else True
-            if not have_seg_obs:
-                seg_labels = tf.ones(inputvars.shape.as_list()[:-1] + [config.experiment.n_seg_classes])
-                seg_sigma = config.factors.segmentation_prior.sigma
-            else:
-                seg_sigma = config.factors.segmentation_obs.sigma
-            if padding:
-                npad = padding
-                if seg_labels_is_dense:
-                    pads = [[0, 0], [npad, npad], [npad, npad], [0, 0]]
-                    seg_labels = tf.pad(seg_labels, paddings=pads)
-                else:
-                    # Adding padding margin to sparse labels
-                    cond_pad = tf.logical_and(tf.range(seg_labels.shape[-1]) >= 1,
-                                              tf.range(seg_labels.shape[-1]) <= 2)
-                    seg_labels = tf.where(cond_pad, seg_labels + npad, seg_labels)
-            seglabs_init = tf.where((tf.reduce_sum(seg_labels, axis=-1) == 1.)[..., None], seg_labels * 2. - 1., 0.)
-            segmentvars = SegmentationVariable(mu_init=seg_labels[..., 1][..., None] if config.factors.segmentation_obs.two_class else seglabs_init,
-                                               sigma_init=seg_sigma,
-                                               img_shape=img_noisy.shape)
-            if is_reinit:
-                layer_prev.segment_vars = segmentvars
-                segmentvars = layer_prev.segment_vars
-            if have_seg_obs:
-                segmentation_fac_edge = Edge(var_to_fac_eta=tf.zeros_like(segmentvars.mu),
-                                             var_to_fac_Lambda=tf.zeros_like(segmentvars.mu),
-                                             fac_to_var_eta=segmentvars.mu / seg_sigma ** 2,
-                                             fac_to_var_Lambda=tf.ones_like(segmentvars.mu) / seg_sigma ** 2,
-                                             name='segment_edge',
-                                             **edge_args)
-                if seg_labels_is_dense:
-                    seg_labels_sparse = segmentvars.make_sparse(seg_labels)
-                    seg_labels_dense = seg_labels
-                else:
-                    seg_labels_sparse = seg_labels
-                    seg_labels_dense = segmentvars.make_dense(seg_labels, img_noisy.shape)
-
-                if config.factors.segmentation_obs.no_softmax:
-                    def factor_type(*args, **kwargs):
-                        return SegmentationObservationFactor(*args, **kwargs,
-                                                             two_class=config.factors.segmentation_obs.two_class)
-                else:
-                    factor_type = BinarySegmentationObservationFactor if config.factors.segmentation_obs.two_class else SoftmaxSegmentationObservationFactor
-
-                segment_factor_kwargs = dict(sigma=config.factors.segmentation_obs.sigma,
-                                             sparse_labels=seg_labels_sparse,
-                                             dense_labels=seg_labels_dense,
-                                             relin_freq=config.factors.segmentation_obs.relin_freq,
-                                             var_edges=segmentation_fac_edge,
-                                             N_rob=config.factors.segmentation_obs.N_rob,
-                                             rob_type=config.factors.segmentation_obs.rob_type,
-                                             kmult=config.factors.segmentation_obs.kmult)
-                if is_reinit:
-                    layer_prev.segment_obs_factor.__init__(**segment_factor_kwargs)
-                else:
-                    segment_obs_factor = factor_type(**segment_factor_kwargs)
-
-                # Correct fac to var messages along edges by masking out
-                # messages from pixels with no segmentation class obs
-                segmentation_fac_edge.fac_to_var_eta *= tf.cast(segment_obs_factor.mask, segmentvars.mu.dtype)
-                segmentation_fac_edge.fac_to_var_Lambda *= tf.cast(segment_obs_factor.mask, segmentvars.mu.dtype)
-                segmentvars.eta *= tf.cast(segment_obs_factor.mask, segmentvars.mu.dtype)
-                segmentvars.Lambda *= tf.cast(segment_obs_factor.mask, segmentvars.mu.dtype)
-
-            if not is_reinit:
-                segment_prior_edge = Edge(var_to_fac_eta=tf.zeros_like(segmentvars.mu),
-                                          var_to_fac_Lambda=tf.zeros_like(segmentvars.mu),
-                                          fac_to_var_eta=tf.zeros_like(segmentvars.mu),
-                                          fac_to_var_Lambda=tf.ones_like(segmentvars.mu) / config.factors.segmentation_prior.sigma ** 2.,
-                                          name='segment_prior_edge',
-                                          **edge_args)
-                segment_prior_factor = UnaryFactor(sigma=config.factors.segmentation_prior.sigma,
-                                                   obs=tf.zeros_like(segmentvars.mu),
-                                                   var_edges=segment_prior_edge)
-
-            # Add prior messages to segmentation vars
-            seg_prior_eta, seg_prior_Lambda = segment_prior_factor.get_eta_Lambda()
-            segmentvars.eta += seg_prior_eta
-            segmentvars.Lambda += seg_prior_Lambda
-
         pixobs_to_var_eta = inputvars.mu / config.factors.pixel_obs.sigma ** 2.
         pixobs_to_var_Lambda = tf.ones_like(inputvars.mu) / config.factors.pixel_obs.sigma ** 2
-        if img_mask is not None:
-            pixobs_to_var_eta *= img_mask
-            pixobs_to_var_Lambda *= img_mask
         input_edge_kwargs = dict(var_to_fac_eta=tf.zeros_like(inputvars.mu),
                                  var_to_fac_Lambda=tf.zeros_like(inputvars.mu),
                                  fac_to_var_eta=pixobs_to_var_eta,
@@ -588,95 +540,23 @@ def init_conv_layer(filters_init, config, n_filts,
     else:
         pixel_obs_factor = None
 
-    component_prior_factor = None
-    component_factors = None
-    component_vars = None
-    component_filter_fac_edge = None
-    if config.use_component_vars:
-        nx, ny = get_n_strides(inputvars.mu, stride, ksize)
-        componentshp = [inputvars.shape[0],
-                        ny, nx,
-                        inputvars.shape[-1],
-                        n_filts,
-                        int(ksize ** 2.)]
-
-        # Zero mean prior
-        component_prior_edge = Edge(var_to_fac_eta=tf.zeros(componentshp),
-                                    var_to_fac_Lambda=tf.zeros(componentshp),
-                                    fac_to_var_eta=tf.zeros(componentshp),
-                                    fac_to_var_Lambda=tf.ones(componentshp) / config.factors.component_prior.sigma,
-                                    name='component_prior_edge',
-                                    **edge_args)
-        component_prior_factor = UnaryFactor(sigma=config.factors.component_prior.sigma,
-                                             obs=tf.zeros(componentshp),
-                                             var_edges=component_prior_edge)
-
-        compvar_init = coeff_var_init[..., None, :, None] * filtervars.mu_flat[None, None, None]
-        component_vars = ComponentVariable(mu_init=compvar_init,
-                                           sigma_init=config.factors.component_prior.sigma)
-        coeffcompeta = tf.broadcast_to(coeff_prior_eta[..., None, :, None], componentshp)
-        coeffcompLambda = tf.broadcast_to(coeff_prior_Lambda[..., None, :, None], componentshp)
-        coeff_component_factor_edges = Edge(var_to_fac_eta=coeffcompeta,
-                                             var_to_fac_Lambda=coeffcompLambda,
-                                             fac_to_var_eta=tf.zeros_like(coeffcompeta),
-                                             fac_to_var_Lambda=tf.zeros_like(coeffcompLambda),
-                                            name='coeff_edge'
-                                            **edge_args)
-        filtcompeta = tf.broadcast_to(filter_prior_edge.fac_to_var_eta[None, None, None], componentshp)
-        filtcompLambda = tf.broadcast_to(filter_prior_edge.fac_to_var_Lambda[None, None, None], componentshp)
-        filter_component_factor_edges = Edge(var_to_fac_eta=filtcompeta,
-                                             var_to_fac_Lambda=filtcompLambda,
-                                             fac_to_var_eta=tf.zeros_like(filtcompeta),
-                                             fac_to_var_Lambda=tf.zeros_like(filtcompLambda),
-                                             name='filter_edge')
-        compvar_component_factor_edges = Edge(var_to_fac_eta=component_prior_edge.fac_to_var_eta,
-                                              var_to_fac_Lambda=component_prior_edge.fac_to_var_Lambda,
-                                              fac_to_var_eta=tf.zeros_like(component_prior_edge.fac_to_var_eta),
-                                              fac_to_var_Lambda=tf.zeros_like(component_prior_edge.fac_to_var_Lambda),
-                                              name='component_edge')
-
-        component_factors = ComponentFactor(sigma=config.factors.component_consist.sigma,
-                                            coeff_var_edges=coeff_component_factor_edges,
-                                            filter_var_edges=filter_component_factor_edges,
-                                            component_var_edges=compvar_component_factor_edges,
-                                            N_rob=config.factors.component_consist.N_rob,
-                                            rob_type=config.factors.component_consist.rob_type,
-                                            relin_freq=config.factors.component_consist.relin_freq,
-                                            lin_point=[filters_init, coeff_var_init, compvar_init],
-                                            kmult=config.factors.component_consist.kmult)
-
-        # Messages will be initialised in init_recon_edge_messages()
-        component_filter_fac_edge = Edge(momentum=config.momentum, dropout=config.dropout)
 
     if config.factors.recon.pairwise:
         def filtfactclass(*args, **kwargs):
             return PairwiseSmoothingFactorDecomp(n_filters=None, *args, **kwargs)
     elif config.factors.recon.sum_filters:
         assert config.use_filter_coeffs, "Sum recon factors only supported when using filter coeffs"
-        if config.factors.recon.per_pixel:
+        if config.factors.recon.tpose:  # Generate, transpose conv
             def filtfactclass(*args, **kwargs):
-                return AdditiveFilterFactorSumPixel(n_filters=n_filts, *args, **kwargs)
+                return AdditiveFilterFactorSumTpose(n_filters=n_filts, *args, **kwargs)
         elif config.factors.recon.feedforward:
             def filtfactclass(*args, **kwargs):
                 return FeedforwardFilterFactor(n_filters=n_filts, *args, **kwargs)
-        elif config.factors.recon.decompose:
-            def filtfactclass(*args, **kwargs):
-                return AdditiveFilterFactorSumDecomp(n_filters=n_filts, *args, **kwargs)
-        else:
-            def filtfactclass(*args, **kwargs):
-                return AdditiveFilterFactorSum(n_filters=n_filts, *args, **kwargs)
-    else:
-        filtfactclass = AdditiveFilterFactorDecomp if config.factors.recon.decompose else AdditiveFilterFactor
-    if config.use_component_vars:
-        init_lin_point = [compvar_init, inputvars.mu]
-    else:
-        init_lin_point = [filters_init, inputvars.mu]
-        if config.use_filter_coeffs:
-            init_lin_point += [coeff_var_init]
-        if config.factors.recon.use_bias:
-            init_lin_point += [biasvars.mu]
-    if doing_segmentation and is_first_layer:
-        init_lin_point[1] = tf.concat([init_lin_point[1], segmentvars.mu], axis=-1)
+    init_lin_point = [filters_init, inputvars.mu]
+    if config.use_filter_coeffs:
+        init_lin_point += [coeff_var_init]
+    if config.factors.recon.use_bias:
+        init_lin_point += [biasvars.mu]
 
     filtfac_kwargs = dict(sigma=config.factors.recon.sigma,
                           init_lin_point=init_lin_point,
@@ -685,12 +565,8 @@ def init_conv_layer(filters_init, config, n_filts,
                           filter_var_edges=filter_filter_fac_edge,
                           coeff_var_edges=coeff_filter_fac_edge,
                           bias_var_edges=bias_filter_fac_edge,
-                          component_var_edges=component_filter_fac_edge,
                           N_rob=config.factors.recon.N_rob,
                           rob_type=config.factors.recon.rob_type,
-                          dynamic_robust_mixture_weight=False, #config['dynamic_robust_thresh_mixture_weight'],
-                          pass_n_low_energy_filter_messages=False,  #config['select_n_lowest_energy_filters'],
-                          compute_low_energy_filter_message_only=False,
                           rec_field=(ksize, ksize),
                           stride=stride,
                           relative_to_centre=config.factors.recon.relative_to_centre or False,
@@ -714,27 +590,19 @@ def init_conv_layer(filters_init, config, n_filts,
                              filter_vars=filtervars,
                              filter_prior_factor=filter_prior_factor,
                              pixel_obs_factor=pixel_obs_factor,
-                             segmentation_obs_factor=segment_obs_factor,
-                             segmentation_prior_factor=segment_prior_factor,
                              inputvars=inputvars,
                              use_filter_coeffs=config.use_filter_coeffs,
                              stride=stride,
                              coeff_prior_factor=coeff_prior_factor,
                              bias_prior_factor=bias_prior_factor,
-                             component_prior_factor=component_prior_factor,
                              use_decomp_filtfac=config.factors.recon.decompose,
                              use_sum_filtfac=config.factors.recon.sum_filters,
                              use_feedforward_filtfac=config.factors.recon.feedforward,
-                             use_component_vars=config.use_component_vars,
                              use_bias=config.factors.recon.use_bias,
-                             coeff_pad=coeff_padding,
-                             colour=config.colour)
+                             coeff_pad=coeff_padding)
 
-    layclasses = {'gbp': GBPConvLayer, 'batch': BatchLearner}
-    if config['inference'] == 'batch':
-        extra_args = {'momentum': config.batch_momentum}
-    else:
-        extra_args = {}
+    layclasses = {'gbp': GBPConvLayer}
+    extra_args = {}
     if is_reinit:
         layer = layer_prev
     else:
@@ -742,24 +610,19 @@ def init_conv_layer(filters_init, config, n_filts,
             img_in=img_noisy,
             filter_vars=filtervars,
             input_vars=inputvars,
-            segmentation_vars=segmentvars,
-            component_vars=component_vars,
             bias_vars=biasvars,
             filter_factor=filter_factor,
             filter_prior_factor=filter_prior_factor,
             coeff_prior_factor=coeff_prior_factor,
             bias_prior_factor=bias_prior_factor,
-            component_factor=component_factors,
-            component_prior_factor=component_prior_factor,
             pixel_obs_factor=pixel_obs_factor,
-            segmentation_obs_factor=segment_obs_factor,
-            segmentation_prior_factor=segment_prior_factor,
             stride=stride,
             coeff_vars=coeffvars,
             img_ground_truth=img_gt if is_first_layer else None,
             **extra_args)
-    if config.factors.recon.per_pixel:
-        layer.filter_factor.depatch_fn = layer.depatchify
+    if config.factors.recon.fixed_inputs:
+        layer.fix_inputs()
+
     return layer
 
 
@@ -780,8 +643,20 @@ def init_dense_layer(config: dotdict,
     else:
         weightvars = WeightVariable(weights_init, sigma_init=config.factors.weight_prior.sigma)
 
+    if config.factors.dense.use_bias:
+        prod = tf.einsum('ba,cb->ca', weightvars.mu, tf.reshape(input_vars.mu, [input_vars.mu.shape[0], -1]))
+        bias_init = - np.mean(prod, axis=0)    # Choose init bias s.t. outputs zero-centred
+        if is_reinit:
+            layer_prev.bias_vars = BiasVariable(bias_init, sigma_init=config.factors.bias_prior.sigma)
+            biasvars = layer_prev.bias_vars
+        else:
+            biasvars = BiasVariable(bias_init, sigma_init=config.factors.bias_prior.sigma)
+    else:
+        biasvars = None
     if config.random_coeff_init:
-        coeff_var_init = tf.random.normal(shape=(n_data, ndim_out), seed=coeff_init_seed) * config.init_coeff_std
+        # Init coeffs to be consistent with weights, inputs and biases
+        coeff_var_init = tf.einsum('ba,cb->ca', weightvars.mu, tf.reshape(input_vars.mu, [input_vars.mu.shape[0], -1]))
+        coeff_var_init += bias_init[None] if config.factors.dense.use_bias else 0.
     else:
         coeff_var_init = tf.ones((n_data, ndim_out)) * config.coeff_init
     if is_reinit:
@@ -790,39 +665,33 @@ def init_dense_layer(config: dotdict,
     else:
         coeffvars = CoeffVariable(coeff_var_init, sigma_init=config.factors.coeff_prior.sigma)
 
-    if config.factors.dense.use_bias:
-        if is_reinit:
-            layer_prev.bias_vars = BiasVariable(tf.zeros((ndim_out,)), sigma_init=config.factors.bias_prior.sigma)
-            biasvars = layer_prev.bias_vars
-        else:
-            biasvars = BiasVariable(tf.zeros((ndim_out,)), sigma_init=config.factors.bias_prior.sigma)
-    else:
-        biasvars = None
 
     # Create edges to dense factor
     n_data = input_vars.shape[0]
     edge_args = dict(momentum=config.momentum, dropout=config.dropout)
+    decompose = bool(config.factors.dense.decompose) if config.factors.dense.decompose is not None else True
+    in_shp = [n_data, ndim_out, ndim_in] if decompose else [n_data, ndim_in]
     input_edge = Edge(
-        var_to_fac_eta=tf.zeros([n_data, ndim_out, ndim_in]),
-        var_to_fac_Lambda=tf.ones([n_data, ndim_out, ndim_in]) / config.factors.coeff_prior.sigma ** 2.,
-        fac_to_var_eta=tf.zeros([n_data, ndim_out, ndim_in]),
-        fac_to_var_Lambda=tf.zeros([n_data, ndim_out, ndim_in]),
+        var_to_fac_eta=tf.broadcast_to(tf.reshape(input_vars.eta, [n_data, 1, ndim_in]), in_shp) if decompose else tf.reshape(input_vars.eta, in_shp),    # Just for init, will be updated during GBP
+        var_to_fac_Lambda=tf.broadcast_to(tf.reshape(input_vars.Lambda, [n_data, 1, ndim_in]), in_shp) if decompose else tf.reshape(input_vars.Lambda, in_shp),
+        fac_to_var_eta=tf.zeros(in_shp),
+        fac_to_var_Lambda=tf.zeros(in_shp),
         name='input_edge',
         **edge_args)
-    weight_edge = Edge(var_to_fac_eta=tf.zeros([n_data, ndim_out, ndim_in]),
+    weight_edge = Edge(var_to_fac_eta=tf.broadcast_to(weights_init.T[None] / config.factors.weight_prior.sigma ** 2., [n_data, ndim_out, ndim_in]),   # Just for init, will be updated during GBP
                        var_to_fac_Lambda=tf.ones([n_data, ndim_out, ndim_in]) / config.factors.weight_prior.sigma ** 2.,
                        fac_to_var_eta=tf.zeros([n_data, ndim_out, ndim_in]),
                        fac_to_var_Lambda=tf.zeros([n_data, ndim_out, ndim_in]),
                        name='weight_edge',
                        **edge_args)
-    output_edge = Edge(var_to_fac_eta=tf.zeros([n_data, ndim_out]),
+    output_edge = Edge(var_to_fac_eta=tf.broadcast_to(coeff_var_init / config.factors.coeff_prior.sigma ** 2., [n_data, ndim_out]),    # Just for init, will be updated during GBP
                        var_to_fac_Lambda=tf.ones([n_data, ndim_out]) / config.factors.coeff_prior.sigma ** 2.,
                        fac_to_var_eta=tf.zeros([n_data, ndim_out]),
                        fac_to_var_Lambda=tf.zeros([n_data, ndim_out]),
                        name='coeff_edge',
                        **edge_args)
     if config.factors.dense.use_bias:
-        bias_edge = Edge(var_to_fac_eta=tf.zeros([n_data, ndim_out]),
+        bias_edge = Edge(var_to_fac_eta=tf.broadcast_to(bias_init / config.factors.bias_prior.sigma ** 2., [n_data, ndim_out]),     # Just for init, will be updated during GBP
                          var_to_fac_Lambda=tf.ones([n_data, ndim_out]) / config.factors.bias_prior.sigma ** 2.,
                          fac_to_var_eta=tf.zeros([n_data, ndim_out]),
                          fac_to_var_Lambda=tf.zeros([n_data, ndim_out]),
@@ -841,7 +710,7 @@ def init_dense_layer(config: dotdict,
         **edge_args)
     weight_prior_edge = Edge(var_to_fac_eta=tf.zeros([ndim_in, ndim_out]),
                              var_to_fac_Lambda=tf.zeros([ndim_in, ndim_out]),
-                             fac_to_var_eta=tf.zeros([ndim_in, ndim_out]),
+                             fac_to_var_eta=tf.broadcast_to(weights_init / config.factors.weight_prior.sigma ** 2., [ndim_in, ndim_out]),   # Just for init, will be updated during GBP
                              fac_to_var_Lambda=tf.ones([ndim_in, ndim_out]) / config.factors.weight_prior.sigma ** 2.,
                              name='weight_prior_edge',
                              **edge_args)
@@ -850,6 +719,8 @@ def init_dense_layer(config: dotdict,
     init_lin_point = [input_vars.mu, weightvars.mu, coeffvars.mu]
     if config.factors.dense.use_bias:
         init_lin_point.insert(2, biasvars.mu)
+    if config.factors.dense.noiseless_input:
+        init_lin_point.pop(0)
     dense_factor = \
         DenseFactor(sigma=config.factors.dense.sigma,
                     input_var_edges=input_edge,
@@ -861,10 +732,15 @@ def init_dense_layer(config: dotdict,
                     N_rob=config.factors.dense.N_rob,
                     rob_type=config.factors.dense.rob_type,
                     kmult=config.factors.dense.kmult,
+                    noiseless_input=config.factors.dense.noiseless_input,
+                    input_obs=input_vars.mu,
                     nonlin=config.factors.dense.nonlin or 'none',
                     nonlin_yscale=config.factors.dense.nonlin_yscale or 1.,
                     nonlin_xscale=config.factors.dense.nonlin_xscale or 1.,
-                    fac_to_var_chunksize=fac_to_var_chunksize)
+                    fac_to_var_chunksize=fac_to_var_chunksize,
+                    decompose=decompose)
+    dense_factor.relinearise(0, init_lin_point)
+
     coeff_prior_factor = \
         NonLinearUnaryFactor(sigma=config.factors.coeff_prior.sigma,
                              obs=tf.zeros_like(coeffvars.mu),
@@ -884,7 +760,7 @@ def init_dense_layer(config: dotdict,
                              kmult=config.factors.weight_prior.kmult,
                              relin_freq=config.factors.weight_prior.relin_freq)
     if config.factors.dense.use_bias:
-        bias_prior_edge = Edge(fac_to_var_eta=tf.zeros([ndim_out]),
+        bias_prior_edge = Edge(fac_to_var_eta=bias_init / config.factors.bias_prior.sigma ** 2.,    # Just for init, will be updated during GBP
                                fac_to_var_Lambda=tf.ones([ndim_out]) / config.factors.bias_prior.sigma ** 2.,
                                var_to_fac_eta=tf.zeros([ndim_out]),
                                var_to_fac_Lambda=tf.zeros([ndim_out]),
@@ -892,7 +768,7 @@ def init_dense_layer(config: dotdict,
                                **edge_args)
         bias_prior_factor = \
             NonLinearUnaryFactor(sigma=config.factors.bias_prior.sigma,
-                                 obs=config.factors.bias_prior.mean,
+                                 obs=bias_init,
                                  var_edges=bias_prior_edge,
                                  init_lin_point=[biasvars.mu],
                                  N_rob=config.factors.bias_prior.N_rob,
@@ -926,22 +802,19 @@ def init_classification_layer(config: dotdict,
                               class_label: np.array,
                               momentum: float = 0.,
                               classifier_type: [str, None] = None,
-                              layer_prev: [None, GBPBinaryClassObservationLayer, GBPSoftmaxClassObservationLayer] = None,
+                              layer_prev: [None, GBPSoftmaxClassObservationLayer] = None,
                               classes_sub: [None, list, tuple] = None):
     is_reinit = layer_prev is not None
     input_to_class_factor_edge = \
         Edge(var_to_fac_eta=input_prior_factor.var_edges.fac_to_var_eta,
              var_to_fac_Lambda=input_prior_factor.var_edges.fac_to_var_Lambda,
              fac_to_var_eta=tf.zeros(input_vars.shape),
-             fac_to_var_Lambda=input_prior_factor.var_edges.fac_to_var_Lambda,
+             fac_to_var_Lambda=tf.zeros(input_vars.shape),
              momentum=momentum,
              name='class_input_edge')
 
-    classifier_type = classifier_type or 'softmax'
-    factor_type = {'softmax': SoftmaxClassObservationFactor,
-                   'binary': BinaryClassObservationFactor}[classifier_type]
-    layer_type = {'softmax': GBPSoftmaxClassObservationLayer,
-                  'binary': GBPBinaryClassObservationLayer}[classifier_type]
+    factor_type = SoftmaxClassObservationFactor
+    layer_type = GBPSoftmaxClassObservationLayer
 
     class_factor = factor_type(label=class_label,
                                sigma=config.sigma,
@@ -961,76 +834,52 @@ def init_classification_layer(config: dotdict,
     return class_layer
 
 
-def init_segmentation_layer(config: dotdict,
-                            input_vars: [PixelVariable, CoeffVariable],
-                            input_prior_factor: UnaryFactor,
-                            seg_labels: np.array,
-                            momentum: float = 0.,
-                            layer_prev: [None, BinarySegmentationObservationFactor, SoftmaxSegmentationObservationFactor] = None):
-    is_reinit = layer_prev is not None
-    input_to_class_factor_edge = \
-        Edge(var_to_fac_eta=input_prior_factor.var_edges.fac_to_var_eta,
-             var_to_fac_Lambda=input_prior_factor.var_edges.fac_to_var_Lambda,
-             fac_to_var_eta=tf.zeros(input_vars.shape),
-             fac_to_var_Lambda=input_prior_factor.var_edges.fac_to_var_Lambda,
-             momentum=momentum,
-             name='class_input_edge')
+def init_regression_obs_layer(y_obs: np.array,
+                              input_vars: CoeffVariable,
+                              config: dotdict):
+    # Create output obs factor
+    obs_to_var_eta = y_obs / config.sigma ** 2.
+    obs_to_var_Lambda = tf.ones_like(y_obs) / config.sigma ** 2.
+    output_fac_edge = Edge(var_to_fac_eta=tf.zeros_like(y_obs),
+                           var_to_fac_Lambda=tf.zeros_like(y_obs),
+                           fac_to_var_eta=obs_to_var_eta,
+                           fac_to_var_Lambda=obs_to_var_Lambda)
 
-    seg_labels_is_dense = seg_labels.shape[:-1] == input_vars.mu.shape[:-1]
-    img_shape = input_vars.mu.shape[:-1].as_list() + [1]   # Channels dim doesn't matter
-    segvar = SegmentationVariable(input_vars.mu, sigma_init=1., img_shape=input_vars.mu.shape[:-1].as_list() + [1])
-    if seg_labels_is_dense:
-        seg_labels_sparse = segvar.make_sparse(seg_labels)
-        seg_labels_dense = seg_labels
-    else:
-        seg_labels_sparse = seg_labels
-        seg_labels_dense = segvar.make_dense(seg_labels, img_shape)
-
-    if config.no_softmax:
-        def factor_type(*args, **kwargs):
-            return SegmentationObservationFactor(*args, **kwargs,
-                                                 two_class=config.two_class)
-    else:
-        factor_type = BinarySegmentationObservationFactor if config.two_class else SoftmaxSegmentationObservationFactor
-    segment_obs_factor = \
-        factor_type(
-            config.sigma,
-            sparse_labels=seg_labels_sparse,
-            dense_labels=seg_labels_dense,
-            relin_freq=config.relin_freq,
-            var_edges=input_to_class_factor_edge,
-            N_rob=config.N_rob,
-            rob_type=config.rob_type,
-            kmult=config.kmult)
-    segment_obs_factor.update_outgoing_messages([])
-    if is_reinit:
-        layer_prev.input_vars = input_vars
-        layer_prev.segmentation_factor = segment_obs_factor
-        return layer_prev
-
-    class_layer = GBPSegmentationObservationLayer(segment_obs_factor, input_vars=input_vars)
-    return class_layer
+    regression_obs_factor = UnaryFactor(config.sigma,
+                                        obs=y_obs,
+                                        var_edges=output_fac_edge,
+                                        N_rob=config.N_rob,
+                                        rob_type=config.rob_type,
+                                        kmult=config.kmult,)
+    layr = GBPRegressionObsLayer(regression_obs_factor=regression_obs_factor, input_vars=input_vars)
+    return layr
 
 
-def prep_no_padding(config: dotdict, segmentation_obs: [np.array, None]):
-    """
-    Instead of padding inputs and activations,
-    remove border from dense segmentation observations
-    """
-    if segmentation_obs is not None:
-        # Find how much padding there would have been
-        total_pad = sum([layconf.padding if 'padding' in layconf else 0
-                         for layconf in config.architecture])
+def init_input_obs_layer(img_noisy: np.array, config: dotdict, img_mask=None):
+    # Create pixl obs factor
+    pixobs_to_var_eta = img_noisy / config.factors.pixel_obs.sigma ** 2.
+    pixobs_to_var_Lambda = tf.ones_like(img_noisy) / config.factors.pixel_obs.sigma ** 2.
+    if img_mask is not None:
+        pixobs_to_var_eta *= tf.cast(img_mask, pixobs_to_var_eta.dtype)
+        pixobs_to_var_Lambda *= tf.cast(img_mask, pixobs_to_var_Lambda.dtype)
+    input_fac_edge = Edge(var_to_fac_eta=tf.zeros_like(img_noisy),
+                          var_to_fac_Lambda=tf.zeros_like(img_noisy),
+                          fac_to_var_eta=pixobs_to_var_eta,
+                          fac_to_var_Lambda=pixobs_to_var_Lambda)
 
-        # Remove this from border of seg label tensor
-        segmentation_obs = segmentation_obs[:, total_pad:-total_pad, total_pad:-total_pad]
-
-    # Now set padding to zero in architecture config
-    config = deepcopy(config)
-    for layr in config.architecture:
-        if 'padding' in layr:
-            layr.padding = 0
-    return config, segmentation_obs
+    pixel_obs_factor = PixelObservationFactor(config.factors.pixel_obs.sigma,
+                                              obs=img_noisy,
+                                              init_lin_point=[img_noisy],
+                                              relin_freq=config.factors.pixel_obs.relin_freq,
+                                              var_edges=input_fac_edge,
+                                              N_rob=config.factors.pixel_obs.N_rob,
+                                              rob_type=config.factors.pixel_obs.rob_type,
+                                              kmult=config.factors.pixel_obs.kmult,
+                                              mask=img_mask,
+                                              mask_prec=config.factors.pixel_obs.mask_prec)
+    input_vars = PixelVariable(mu_init=img_noisy, sigma_init=config.factors.pixel_obs.sigma)
+    layr = GBPInputObsLayer(pixel_obs_factor=pixel_obs_factor, input_vars=input_vars)
+    return layr
 
 
 def init_layers(config: dotdict,
@@ -1043,17 +892,10 @@ def init_layers(config: dotdict,
                 pix_var_init: [None, np.array] = None,
                 filter_var_init: [None, Iterable[np.array]] = None,
                 coeff_init: [None, Iterable[np.array]] = None,
-                output_class_obs: [np.array, None] = None,
-                segmentation_obs: [np.array, None] = None,
+                output_obs: [np.array, None] = None,
                 layers_prev: [None, list, tuple] = None,
                 classes_sub: [None, list, tuple] = None,
                 batch_id: int = 0):
-    if segmentation_obs is not None or config.experiment.n_seg_classes is not None:
-        assert config.architecture[0].type == 'conv', 'Segmentation only currently supported with conv layers'
-
-    if config.no_padding:
-        print('Prepping no padding')
-        config, segmentation_obs = prep_no_padding(config, segmentation_obs)
 
     def _layer_config_override(global_conf: dotdict, layer_conf: dotdict):
         if layer_conf.factors is not None:
@@ -1080,20 +922,12 @@ def init_layers(config: dotdict,
         if layconf.type == 'conv':
             kmeans_filter_init = layconf.kmeans_init if layconf.kmeans_init else False
 
-            seg_labels = segmentation_obs if lay_id == 0 else None
-            if any([c.type == 'segmentation_obs' for c in config.architecture]) and lay_id == 0:
-                # Segmentation head later on - don't attach seg obs to first layer
-                local_config.experiment.n_seg_classes = None
-                seg_labels = None
-
             if filter_var_init is not None:
                 if isinstance(filter_var_init[lay_id], np.array):
                     lay_weights = filter_var_init[lay_id]
                 else:
                     raise TypeError
             else:
-                if local_config.experiment.n_seg_classes is not None and lay_id == 0:
-                    n_filts_in += 1 if local_config.factors.segmentation_obs.two_class else local_config.experiment.n_seg_classes
                 lay_weights = get_init_conv_weights(img_obs, layconf.n_filters,
                                                     n_filts_in=n_filts_in,
                                                     std=weight_init_std,
@@ -1102,9 +936,8 @@ def init_layers(config: dotdict,
                                                     seed=(weight_init_seed + lay_id ** 2),  # Ensure all layers have diff init weights
                                                     ksize=local_config.factors.recon.ksize,
                                                     zero_centre=False)
-            # print(f'Feedforward: {local_config.fac`tors.recon.feedforward}')
-            # if len(config.architecture) > lay_id + 1:
-            #       print(f'padding next {config.arc`hitecture[lay_id + 1].padding}')
+
+            print(f'coeff init seeed: {(coeff_init_seed - lay_id ** 2) * batch_id % np.iinfo(np.int32).max + coeff_init_seed}')
             conv_layer = \
                 init_conv_layer(filters_init=lay_weights,
                                 config=local_config,
@@ -1122,7 +955,6 @@ def init_layers(config: dotdict,
                                 stride=local_config.factors.recon.stride,
                                 coeff_init_seed=(coeff_init_seed - lay_id ** 2) * batch_id % np.iinfo(np.int32).max + coeff_init_seed,  # Diff coeff seed for each batch and layer
                                 fac_to_var_chunksize=local_config.factors.recon.fac_to_var_chunksize or 1,
-                                seg_labels=seg_labels,
                                 layer_prev=layprev)
             if config.experiment.fix_pixels and lay_id == 0:
                 conv_layer.fix_inputs()
@@ -1133,6 +965,13 @@ def init_layers(config: dotdict,
                                           stride=local_config.factors.recon.stride,
                                           img_width=width,
                                           img_height=height)
+
+        elif layconf.type == 'input_obs':
+            input_obs_layer = init_input_obs_layer(img_noisy=img_obs,
+                                                   config=local_config,
+                                                   img_mask=img_mask)
+            layers.append(input_obs_layer)
+
         elif layconf.type == 'dense':
             ndim_in = n_filts_in * height * width
             layoutdim = layconf.outdim
@@ -1145,7 +984,7 @@ def init_layers(config: dotdict,
                 lay_weights = filter_var_init[lay_id]
             dense_layer = init_dense_layer(config=local_config,
                                            weights_init=lay_weights,
-                                           input_vars=layers[-1].coeff_vars if lay_id > 0 else None,
+                                           input_vars=layers[-1].coeff_vars,
                                            coeff_init_seed=(coeff_init_seed - lay_id ** 2) * batch_id % np.iinfo(np.int32).max,
                                            fac_to_var_chunksize=local_config.factors.dense.fac_to_var_chunksize or 1,
                                            layer_prev=layprev)
@@ -1158,8 +997,10 @@ def init_layers(config: dotdict,
             pool_config = local_config.factors.pool.copy()
 
             # Get initial linearisation point for coeffs of prev layer
-            assert isinstance(layers[-1], GBPConvLayer)
-            input_init = layers[-1].filter_factor.var0[2]
+            if isinstance(layers[-1], GBPConvLayer):
+                input_init = layers[-1].filter_factor.var0[2]
+            else:
+                raise ValueError(f'Layer preceeding pooling layer with id {lay_id} not supported.')
             pool_layer = init_pool_layer(input_vars=layers[-1].coeff_vars,
                                          pool_factor_config=pool_config,
                                          coeff_prior_factor_config=config.factors.coeff_prior,
@@ -1173,94 +1014,48 @@ def init_layers(config: dotdict,
             height //= pool_config.ksize
             width //= pool_config.ksize
 
+        elif layconf.type == 'upsample':
+            upsample_config = local_config.factors.upsample.copy()
+
+            pool_layer = init_upsample_layer(input_vars=layers[-1].coeff_vars,
+                                             upsample_factor_config=upsample_config,
+                                             coeff_prior_factor_config=config.factors.coeff_prior,
+                                             momentum=config.momentum,
+                                             dropout=config.dropout,
+                                             coeff_init_seed=(coeff_init_seed + lay_id ** 2) * batch_id % np.iinfo(
+                                                 np.int32).max + coeff_init_seed,
+                                             coeff_init_std=config.init_coeff_std,
+                                             layer_prev=layprev)
+            layers.append(pool_layer)
+            assert height % upsample_config.ksize == 0
+            assert width % upsample_config.ksize == 0
+            height //= upsample_config.ksize
+            width //= upsample_config.ksize
+
         elif layconf.type == 'softmax_class_obs':
             softmax_layer = \
                 init_classification_layer(input_vars=layers[-1].coeff_vars,
                                           input_prior_factor=layers[-1].coeff_prior_factor,
                                           momentum=config.momentum,
-                                          class_label=output_class_obs,
+                                          class_label=output_obs,
                                           config=local_config.factors.softmax_class_obs,
                                           classifier_type='softmax',
                                           layer_prev=layprev,
                                           classes_sub=classes_sub)
             layers.append(softmax_layer)
-        elif layconf.type == 'binary_class_obs':
-            binary_layer = \
-                init_classification_layer(input_vars=layers[-1].coeff_vars,
-                                          input_prior_factor=layers[-1].coeff_prior_factor,
-                                          momentum=config.momentum,
-                                          class_label=output_class_obs,
-                                          config=local_config.factors.softmax_class_obs,
-                                          classifier_type='binary',
-                                          layer_prev=layprev)
-            layers.append(binary_layer)
-        elif layconf.type == 'segmentation_obs':
-            segment_layer = \
-                init_segmentation_layer(input_vars=layers[-1].coeff_vars,
-                                        input_prior_factor=layers[-1].coeff_prior_factor,
-                                        momentum=config.momentum,
-                                        seg_labels=segmentation_obs,
-                                        config=local_config.factors.segmentation_obs,
-                                        layer_prev=layprev)
-            layers.append(segment_layer)
+        elif layconf.type == 'regression_obs':
+            regression_layer = \
+                init_regression_obs_layer(input_vars=layers[-1].coeff_vars,
+                                          y_obs=output_obs,
+                                          config=local_config.factors.regression_obs)
+            layers.append(regression_layer)
         else:
             raise ValueError(f"layconf.type={layconf.type} is not recognised.")
 
     for layid in range(1, len(layers)):
         layers[layid].link_layer_before(layers[layid - 1])
 
-    # if config.deterministic_init:
-    #     deterministic_approx_init(layers)
-
     return layers
-
-
-# def deterministic_approx_init(layers):
-#     out_approx = None
-#     for lay in layers[::-1]:
-#         if isinstance(lay, GBPConvLayer):
-#             if out_approx is not None:
-#                 lay.coeff_vars.eta = out_approx / lay.coeff_prior_factor.sigma ** 2.
-#                 lay.filter_factor.var0[2] = out_approx
-#                 lay.filter_factor.coeff_var_edges._var_to_fac_eta = out_approx / lay.coeff_prior_factor.sigma ** 2.
-#
-#             # Estimate what inputs to layer should be (roughly) for given coeffs and filters
-#             inp_approx = lay.deterministic_approx_conv_transpose()
-#
-#             # Use this to initialise the linearisation point for the input
-#             lay.filter_factor.var0[1] = inp_approx
-#             lay.input_vars.eta = inp_approx / lay.filter_prior_factor.sigma ** 2.
-#             lay.filter_factor.input_var_edges._var_to_fac_eta = inp_approx / lay.filter_prior_factor.sigma ** 2.
-#             out_approx = inp_approx
-#
-#         elif isinstance(lay, GBPAvgPoolLayer):
-#             ksize = lay.avg_pool_factor.ksize
-#             n_filt = lay.input_vars.shape[-1]
-#
-#             # For avg pool layer - init lower layer vars connected to factor to same
-#             # value as the output var
-#             inp_approx = tf.nn.conv2d_transpose(inp_approx,
-#                                                 tf.ones((ksize, ksize, n_filt, n_filt)),
-#                                                 output_shape=lay.input_vars.shape,
-#                                                 strides=ksize,
-#                                                 padding='VALID')
-#
-#             out_approx = inp_approx
-
-    # for lay_id, lay in enumerate(layers):
-    #     if isinstance(lay, GBPDenseLayer):
-    #         if lay_id > 0 and not lay.dense_factor.is_noiseless_input:
-    #             lay.input_vars.eta = layers[lay_id - 1].coeff_vars.eta
-    #             lay.dense_factor.var0[0] = layers[lay_id - 1].coeff_vars.mu
-    #
-    #         out_approx = lay.deterministic_dense_proj()
-    #
-    #         lay.coeff_vars.eta = out_approx / lay.coeff_prior_factor.sigma ** 2.
-    #         lay.dense_factor.var0[-1] = out_approx
-    #     elif isinstance(lay, GBPSoftmaxClassObservationLayer):
-    #         lay.softmax_factor.var0[0] = layers[lay_id - 1].coeff_vars.mu
-    #         lay.input_vars.eta = layers[lay_id - 1].coeff_vars.eta
-    #         lay.softmax_factor.logit_var_edges._var_to_fac_eta = layers[lay_id - 1].coeff_vars.eta
 
 
 def get_vartype_marginals(model, vartype: [str, list, tuple] = None):
@@ -1280,7 +1075,6 @@ def get_vartype_marginals(model, vartype: [str, list, tuple] = None):
 
 def init_model(config, x,
                y=None,
-               segmentation_obs=None,
                model_to_reinit=None,
                track_edges=False,
                prec_rescaling=1.,
@@ -1288,31 +1082,17 @@ def init_model(config, x,
                n_iter=None,
                force_new_graph=False,
                classes_sub=None,
-               batch_id=0):
+               batch_id=0,
+               input_mask=None):
     print(f'init model, weight seed {config.experiment.weight_init_seed} coeff seed {config.experiment.coeff_init_seed}')
     if config.factors.recon.pairwise:
         config.factors.recon.use_bias = False
 
-    if config.inference == 'backprop':
-        if model_to_reinit is not None:
-            model_to_reinit.compile(optimizer=get_nn_optimiser(config),
-                                    loss=get_nn_loss(config),
-                                    metrics=[tf.keras.metrics.Accuracy()]
-            )
-            return model_to_reinit
-        else:
-            # Training a new NN, must have labels
-            assert y is not None or segmentation_obs is not None, \
-                'Initialising a new NN, but labels not available'
-            model = get_neural_net(config)
-            model.build([None] + x.shape.as_list()[1:])
-            model.compile(optimizer=get_nn_optimiser(config),
-                          loss=get_nn_loss(config))
-            return model
-
     use_bias = config.factors.recon.use_bias
     if config.factors.dense is not None:
         use_bias = use_bias or config.factors.dense.use_bias
+    if model_to_reinit is not None and config.experiment.copy_lin_points:
+        old_lin_points = [lay.linearisation_points for lay in model_to_reinit.layers]
 
     if model_to_reinit is not None and config.experiment.do_filtering:
         old_posteriors = dict()
@@ -1324,22 +1104,22 @@ def init_model(config, x,
     if model_to_reinit is not None:
         # Force new graph if different batch size
         old_bs = model_to_reinit.layers[0].pixel_obs_factor.var_edges.shape[0]
-        print('new pix obs shp', model_to_reinit.layers[0].pixel_obs_factor.var_edges.shape)
-        print(old_bs)
         new_bs = x.shape[0]
-        print(new_bs)
         if old_bs != new_bs:
             force_new_graph = True
+
+    is_classification = config.experiment.with_gbp_softmax_layer
+    is_regression = config.architecture[-1].type == 'regression_obs'
     layers = init_layers(img_obs=x,
                          config=config,
                          weight_init_std=config.init_weight_std,
                          weight_init_seed=config.experiment.weight_init_seed,
                          coeff_init_seed=config.experiment.coeff_init_seed,
-                         output_class_obs=y if config.experiment.with_gbp_softmax_layer else None,
-                         segmentation_obs=segmentation_obs,
+                         output_obs=y if is_regression or is_classification else None,
                          layers_prev=None if model_to_reinit is None or force_new_graph else model_to_reinit.layers,
                          classes_sub=classes_sub,
-                         batch_id=batch_id)
+                         batch_id=batch_id,
+                         img_mask=input_mask)
 
     gbp_net = GBPLearner(layers=layers,
                          layer_schedule=config.layer_schedule,
@@ -1348,20 +1128,35 @@ def init_model(config, x,
     if model_to_reinit is not None:
         # if config.experiment.full_model_init:
         #     return prev_posterior
-        # if config.experiment.copy_lin_points:
-        #     copy_linearisation_points(gbplearner_prev=prev_posterior,
-        #                               gbplearner_new=gbp_net)
+        if config.experiment.copy_lin_points:
+            copy_linearisation_points(to_copy=old_lin_points,
+                                      gbplearner_new=gbp_net)
 
         if config.experiment.do_filtering:
+            def get_prior_sigma(layer, vartype='weight'):
+                assert vartype in ('weight', 'bias')
+                if hasattr(layer, 'use_bias'):
+                    if layer.use_bias:
+                        if isinstance(layer, GBPDenseLayer):
+                            return getattr(layer, f'{vartype}_prior_factor').sigma
+                        elif isinstance(layer, GBPConvLayer):
+                            vtype = 'filter' if vartype == 'weight' else vartype
+                            return getattr(layer, f'{vtype}_prior_factor').sigma
+
             # Add prev posterior over weights and biases as prior
             filtering_on_weights(old_posteriors['weights'], gbp_net,
                                  prec_rescale_factor=prec_rescaling,
-                                 prec_rescale_conv_only=prec_rescaling_conv_only)
+                                 prec_rescale_conv_only=prec_rescaling_conv_only,
+                                 alpha=config.experiment.filtering_alpha,
+                                 init_prior_sigmas=[get_prior_sigma(lay, 'weight') for lay in gbp_net.layers])
 
             if config.experiment.filter_biases and use_bias:
                 filtering_on_biases(old_posteriors['biases'], gbp_net,
                                     prec_rescale_factor=prec_rescaling,
-                                    prec_rescale_conv_only=prec_rescaling_conv_only)
+                                    prec_rescale_conv_only=prec_rescaling_conv_only,
+                                    alpha=config.experiment.filtering_alpha,
+                                    init_prior_sigmas=[get_prior_sigma(lay, 'bias') for lay in gbp_net.layers]
+                                    )
 
             if config.experiment.filter_coeffs:
                 filtering_on_coeffs(old_posteriors['coeffs'], gbp_net,
@@ -1372,8 +1167,10 @@ def init_model(config, x,
                     l.update_coeff_marginals()
                 gbp_net.fix_layer_coeffs()
 
+        if not force_new_graph:
+            gbp_net.compiled = model_to_reinit.compiled
+
     if config.experiment.fix_pixel_channels:
-        # For learning segmentations with fixed pixel recons
         n_img_chans = x.shape[-1]
         gbp_net.layers[0].fixed_first_n_channels = n_img_chans
 

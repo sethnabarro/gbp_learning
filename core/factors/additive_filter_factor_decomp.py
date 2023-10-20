@@ -26,30 +26,18 @@ class AdditiveFilterFactorDecomp(AdditiveFilterFactor):
             msgs = []
             for e in edges:
                 msg_in = getattr(e, f'var_to_fac_{mtype}')
-                if self.pass_n_low_energy_filter_messages:
-                    msgs.append(self._select_low_energy_msgs(msg_in))
-                else:
-                    msgs.append(msg_in)
+                msgs.append(msg_in)
 
-            if mtype == 'Lambda' and self.multidim_filter_vars:
-                mats = [tf.linalg.LinearOperatorDiag(msgs[0]),
-                        tf.linalg.LinearOperatorFullMatrix(msgs[1])]
-                if self.use_filter_coeffs:
-                    mats.append(tf.linalg.LinearOperatorDiag(msgs[2]))
-                msg_combined = tf.linalg.LinearOperatorBlockDiag(mats).to_dense()
-
+            if self.use_filter_coeffs:
+                msg_pc = [msgs[0], msgs[1][..., None], msgs[2][..., None]]
             else:
-                if self.use_filter_coeffs:
-                    msg_pc = [msgs[0], msgs[1][..., None], msgs[2][..., None]]
-                else:
-                    msg_pc = [msgs[0], msgs[1][..., None]]
-                msg_combined = tf.concat(msg_pc, axis=-1)
+                msg_pc = [msgs[0], msgs[1][..., None]]
+            msg_combined = tf.concat(msg_pc, axis=-1)
             msgs_combined.append(msg_combined)
         return msgs_combined
 
     def _get_eta_Lambda_with_filter_coeffs(self, conn_vars):
         # TODO: clean up and comment
-        assert not self.dynamic_robust_mixture_weight, "not yet supported"
         # tf.reduce_sum(self.J * )
         filters, pixels, coeffs = self.var0
 
@@ -100,13 +88,6 @@ class AdditiveFilterFactorDecomp(AdditiveFilterFactor):
         if self.N_rob is not None:
             eta *= k[..., None, None]
             Lambda *= k[..., None, None, None]
-        if self.pass_n_low_energy_filter_messages:
-            n_lowE = self.pass_n_low_energy_filter_messages
-            self.lowest_energy_filter_ids = tf.argsort(E,
-                                                       axis=-1,
-                                                       direction='ASCENDING')[..., :n_lowE]
-            eta = tf.gather(eta, self.lowest_energy_filter_ids, batch_dims=3, axis=-3)
-            Lambda = tf.gather(Lambda, self.lowest_energy_filter_ids, batch_dims=3, axis=-4)
         return eta, Lambda
 
     def get_eta_Lambda(self, conn_vars):
@@ -121,8 +102,6 @@ class AdditiveFilterFactorDecomp(AdditiveFilterFactor):
                                       [0., 0., 0.],
                                       [0., 0., 1.]]) / self.sigma ** 2
             central_pixel_Lambda = tf.broadcast_to(central_pixel_Lambda, Lambda.shape)
-            if self.pass_n_low_energy_filter_messages:
-                k = tf.gather(k, self.lowest_energy_filter_ids, axis=-1, batch_dims=3)
             if self.N_rob is not None:
                 central_pixel_Lambda *= k[..., None, None]
             return eta[..., None, :],\
@@ -146,13 +125,6 @@ class AdditiveFilterFactorDecomp(AdditiveFilterFactor):
                                      factor_plus_mess_Lambda,
                                      factor_eta,
                                      factor_Lambda)
-
-        if self.pass_n_low_energy_filter_messages:
-            # Broadcast messages up to same shape as messages to all filters
-            # Zero out high energy messages
-            n_filters = original_shp[3]
-            marg_outs = self._broadcast_to_all_filters(n_filters, *marg_outs)
-            marg_outs = self.zero_higher_energy_filter_messages(*marg_outs)
 
         self.input_var_edges.fac_to_var_eta, \
             self.input_var_edges.fac_to_var_Lambda,\

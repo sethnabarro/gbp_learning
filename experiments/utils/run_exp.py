@@ -21,6 +21,9 @@ MIN_N_BATCH_TO_PLOT_LAST = 5
 
 def get_args_test(argdict):
     args_test = deepcopy(argdict)
+    if 'inference_test' in args_test:
+        if args_test.inference_test is not None:
+            args_test.inference = args_test.inference_test
     for f in args_test.factors:
         if 'sigma_test_mult' in args_test.factors[f]:
             args_test.factors[f].sigma *= args_test.factors[f].sigma_test_mult
@@ -32,7 +35,7 @@ def get_args_test(argdict):
 
     # Remove softmax head for testing (where we don't have class observation)
     # If using factor graph
-    if args_test.experiment.with_gbp_softmax_layer and args_test.inference == 'gbp':
+    if args_test.experiment.with_gbp_softmax_layer and not args_test.experiment.conditional_generation:
         args_test.architecture = args_test.architecture[:-1]
 
         # Remove softmax head layer from message schedule
@@ -50,18 +53,18 @@ def train_on_batch(gbpnet,
                    y_train=None,
                    y_train_seg=None,
                    n_itrs_start=0):
+    is_classification = args.architecture[-1].type.endswith('class_obs')
     if args.experiment.tf_logdir is not None:
         print('Generating tensorboard profile')
         tf.profiler.experimental.start(args.experiment.tf_logdir)
-        n_itr_per_loop = 3
+        n_itr_per_loop = 10
 
     t_before_train = time.time()
     if args.inference == 'gbp':
         print('Running GBP')
-        gbpnet.run_inference(n_iters=tf.convert_to_tensor(n_itr_per_loop),
+        gbpnet.run_inference(n_iters=n_itr_per_loop,
                              x_img=x_train,
-                             maybe_y_label=y_train,
-                             maybe_y_seg_label=y_train_seg,
+                             maybe_y_label=y_train if is_classification else None,
                              use_static_graph=args.use_static_graph,
                              n_iters_start=tf.convert_to_tensor(n_itrs_start),
                              xla_compile=args.xla_compile)
@@ -89,11 +92,11 @@ def train_on_batch(gbpnet,
             logit_perf(gbpnet.layers[-2].coeff_vars,
                        labels=y_train,
                        test_classes=eval_classes)
-        print(f'Preds train scores: '
-              f'log(avg(lik(logits))): {loglik_samples_train}, '
-              f'loglik(avg(logits)): {ll_logit_mu_train}, '
-              f'acc(avg(probs)): {acc_samples_train}, '
-              f'acc(avg(logits)): {acc_logit_mu_train}')
+        # print(f'Preds train scores: '
+        #       f'log(avg(lik(logits))): {loglik_samples_train}, '
+        #       f'loglik(avg(logits)): {ll_logit_mu_train}, '
+        #       f'acc(avg(probs)): {acc_samples_train}, '
+        #       f'acc(avg(logits)): {acc_logit_mu_train}')
 
     return gbpnet
 
@@ -126,30 +129,22 @@ def train_and_eval(args, train_data, test_fn, model_tr=None, plot_fn=None):
     print(f'Train iterations per eval: {n_iters_per_eval}')
 
     # shuffle_seed = args.experiment.dataset_shuffle_seed if args.experiment.shuffle_batches else None
+    balanced_batches = args.experiment.class_balanced_batches_train
     batcher_kwargs = dict(dataset=train_data,
                           n_examples=examples_per_batch,
                           n_classes=args.experiment.n_classes,
                           classes_sub=args.experiment.train_classes_subset,
                           n_seg_classes=args.experiment.n_seg_classes,
-                          shuffle_batch=args.experiment.shuffle_batches)
-    # x_train_batch, maybe_y_train_batch, maybe_y_train_batch_seg, _ = \
-    #     get_batch(n_examples_so_far=0, shuffle_batch_seed=shuffle_seed, **batcher_kwargs)
+                          shuffle_batch=args.experiment.shuffle_batches,
+                          with_balanced_classes=True if balanced_batches is None else balanced_batches,
+                          corrupt_inputs=args.experiment.corrupt_train_inputs)
+
     classes_sub_model_init = args.experiment.train_classes_subset if args.experiment.no_task_crosstalk_train else None
-    # model_tr1 = init_model(config=args,
-    #                       x=x_train_batch,
-    #                       y=maybe_y_train_batch,
-    #                       model_to_reinit=model_tr,
-    #                       track_edges=args.experiment.plot_message_convergence,
-    #                       prec_rescaling=args.experiment.precision_rescaling,
-    #                       prec_rescaling_conv_only=args.experiment.precision_rescaling_conv_only,
-    #                       segmentation_obs=maybe_y_train_batch_seg,
-    #                       classes_sub=classes_sub_model_init,
-    #                       force_new_graph=True,
-    #                        batch_id=0)
 
     n_iters_per_plot = None
     best_val_score = None
     for batch_id in range(n_train_batches):
+        # print(f'Batch id: {batch_id}, current memory consumption: {tf.config.experimental.get_memory_info("GPU:0")["current"]}')
         # if batch_id == 0:
         #     try:
         #         print('GPU memory use:', tf.config.experimental.get_memory_info('GPU:0')['current'])
@@ -161,7 +156,7 @@ def train_and_eval(args, train_data, test_fn, model_tr=None, plot_fn=None):
         # Train set - sample a train image of each class (dataset was shuffled when loaded)
         so_far = examples_per_batch * batch_id
         shuffle_seed = args.experiment.dataset_shuffle_seed + batch_id if args.experiment.shuffle_batches else None
-        x_train_batch, maybe_y_train_batch, maybe_y_train_batch_seg, ds_end = \
+        x_train_batch, maybe_y_train_batch, maybe_y_train_batch_seg, ds_end, x_mask = \
             get_batch(n_examples_so_far=so_far, shuffle_batch_seed=shuffle_seed, **batcher_kwargs)
 
         if ds_end:
@@ -179,17 +174,23 @@ def train_and_eval(args, train_data, test_fn, model_tr=None, plot_fn=None):
                         train_itr=-1,
                         train_batch_id=batch_id)
             continue
-
+        is_classification = args.architecture[-1].type.endswith('class_obs')
+        is_regression = args.architecture[-1].type == 'regression_obs'
         model_tr = init_model(config=args,
                               x=x_train_batch,
-                              y=maybe_y_train_batch,
+                              y=maybe_y_train_batch if is_classification or is_regression else None,
                               model_to_reinit=model_tr,
                               track_edges=args.experiment.plot_message_convergence,
                               prec_rescaling=args.experiment.precision_rescaling,
                               prec_rescaling_conv_only=args.experiment.precision_rescaling_conv_only,
-                              segmentation_obs=maybe_y_train_batch_seg,
                               classes_sub=classes_sub_model_init,
-                              batch_id=batch_id)
+                              batch_id=batch_id,
+                              input_mask=x_mask)
+        if batch_id == 0 and args.plot_init_model:
+            plot_fn(model=model_tr,
+                    itr=0,
+                    batch_id=batch_id,
+                    edge_stats=None)
 
         iters_by_end = (batch_id + 1) * args.n_iters_per_train_batch
         n_eval_breaks = get_n_eval_steps(n_iters_per_batch=args.n_iters_per_train_batch,
@@ -214,6 +215,7 @@ def train_and_eval(args, train_data, test_fn, model_tr=None, plot_fn=None):
         eval_freq = None if n_eval_breaks == 0 else n_tr_breaks // n_eval_breaks
         print(f'Energy before training: {model_tr.energy(as_numpy=True, sum_all=False)}')
         for tr_loop in range(max(n_tr_breaks, 1)):
+            print(f'Energy before training: {model_tr.energy(as_numpy=True, sum_all=False)}')
             model_tr = \
                 train_on_batch(model_tr,
                                n_itr_per_loop=n_itr_per_loop,
@@ -223,7 +225,7 @@ def train_and_eval(args, train_data, test_fn, model_tr=None, plot_fn=None):
                                x_train=x_train_batch,
                                y_train_seg=maybe_y_train_batch_seg)
 
-            print(f'Energy after training: {model_tr.energy(as_numpy=True, sum_all=False)}')
+            print(f'Energy after training loop {tr_loop}: {model_tr.energy(as_numpy=True, sum_all=False)}')
             itrs_so_far = (tr_loop + 1) * n_itr_per_loop
 
             if n_eval_breaks >= 1:
@@ -318,7 +320,7 @@ def exp_main(args, train_data,
         train_plot_dir = os.path.join(args.experiment.results_dir, 'train')
         os.mkdir(train_plot_dir)
         create_plot_dirs(expdir=train_plot_dir,
-                         subdirs=['coeffs', 'weights', 'msg_diffs'] + plot_subdirs,
+                         subdirs=['coeffs', 'weights', 'msg_diffs', 'generative'] + plot_subdirs,
                          n_layers=len(args.architecture))
 
     if not train_only:
@@ -329,7 +331,7 @@ def exp_main(args, train_data,
         test_plot_dir = os.path.join(args.experiment.results_dir, 'test')
         os.mkdir(test_plot_dir)
         create_plot_dirs(expdir=test_plot_dir,
-                         subdirs=['coeffs', 'weights', 'msg_diffs'] + plot_subdirs,
+                         subdirs=['coeffs', 'weights', 'msg_diffs', 'generative'] + plot_subdirs,
                          n_layers=len(args_test.architecture))
 
     def plot_fn(model, itr, batch_id=None, edge_stats=None, test_batch_id=None, test_itr=None, y_class=None):
@@ -349,6 +351,7 @@ def exp_main(args, train_data,
                                plot_coeffs=args.experiment.plot_coeffs,
                                plot_weights=args.experiment.plot_weights,
                                plot_msg_convergence=args.experiment.plot_message_convergence,
+                               plot_generative_path=args.experiment.plot_generative,
                                y_class=y_class)
 
     test_kwargs = dict() if train_only else dict(args_test=args_test, test_data=test_data)
@@ -371,7 +374,7 @@ def exp_main(args, train_data,
             test_fn(model=gbp_net_init,
                     train_itr=-1,
                     train_batch_id=model_spec['n_batch_so_far'] if model_spec is not None else 0)
-        model_tr = None
+        model_tr = model_te
     else:
         tr_te_out = train_and_eval(args,
                                    train_data=train_data,
@@ -393,12 +396,15 @@ def exp_main(args, train_data,
                                edge_stats=edge_stats,
                                plot_coeffs=args.experiment.plot_coeffs,
                                plot_weights=args.experiment.plot_weights,
+                               plot_generative_path=args.experiment.plot_generative,
                                plot_msg_convergence=args.experiment.plot_message_convergence)
-    if not train_only:
+    if model_te is not None:
         print('Plotting test model')
+        plot_fn(model_te, total_iters, test_batch_id='final', test_itr=-1)
         plot_model_diagnostics(model_te, total_iters, test_plot_dir,
                                plot_coeffs=args.experiment.plot_coeffs,
                                plot_weights=args.experiment.plot_weights,
+                               plot_generative_path=args.experiment.plot_generative,
                                plot_msg_convergence=args.experiment.plot_message_convergence)
 
     return model_tr

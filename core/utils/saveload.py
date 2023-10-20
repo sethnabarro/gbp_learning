@@ -20,7 +20,8 @@ def mkdir_if_new(dirpath):
 
 
 def save_gbp_net(gbp_net: GBPLearner,
-                 savedir: str, args: dotdict,
+                 savedir: str,
+                 args: dotdict,
                  n_batch_so_far: int,
                  n_iter_current_batch: int,
                  input_image: [tf.Tensor, None] = None,
@@ -84,7 +85,8 @@ def save_gbp_net(gbp_net: GBPLearner,
                     recursive_save(n, s, subdir)
 
     for l, lay in enumerate(gbp_net.layers):
-        lay.update_marginals()
+        if args.inference == 'gbp':
+            lay.update_marginals()
         for sn, st in lay.named_state:
             if sn == 'input_marginals' and l > 0:
                 # Input vars in this layer same as coeffs (outputs) from previous
@@ -231,7 +233,7 @@ def assert_model_marginals_equal(model_a: GBPLearner,
 def load_checkpoint(dataset,  checkpoint_dir, args, classes_sub=None):
     # TODO fix input_img and output args below, needed to load model but not used
     # Load from checkpoint
-    x_batch, maybe_y_batch, maybe_y_batch_seg, _ = \
+    x_batch, maybe_y_batch, maybe_y_batch_seg, _, _ = \
         get_batch(dataset,
                   n_examples=1,
                   n_examples_so_far=0,

@@ -13,8 +13,7 @@ def loglik_per_example(model_logprobs, labels):
 
 def accuracy(logits, labels):
     # Average probs over logit samples
-    pred_prob_avg = tf.reduce_mean(tf.nn.softmax(logits, axis=-1), axis=0)
-    pred_argmax = tf.argmax(pred_prob_avg, axis=-1, output_type=tf.int32)
+    pred_argmax = tf.argmax(logits, axis=-1, output_type=tf.int32)
     labels_argmax = tf.argmax(labels, axis=-1, output_type=tf.int32)
     return tf.reduce_mean(tf.cast(pred_argmax == labels_argmax, tf.float32))
 
@@ -61,7 +60,7 @@ def logit_perf(logits, labels, test_classes=None, seed=888):
     # Accuracy according to logit samples
     acc_samples = accuracy(logit_samples, labels)
 
-    print(f'Predicted class probs (test): {tf.nn.softmax(logit_mu).numpy()}')
+    print(f'Predicted class probs for first 4 inputs: {tf.nn.softmax(logit_mu).numpy()[:4]}')
 
     return tf.reduce_mean(loglik_samples), loglik_logit_mu, acc_samples, acc_logit_mu
 
@@ -125,6 +124,8 @@ def get_batchsize(args, train_or_test=None):
         n_classes = args.experiment.n_classes if \
             classes_subset is None else \
             len(classes_subset)
+        print(examples_per_class, n_classes, n_batches)
+        print(type(examples_per_class), type(n_classes), type(n_batches))
         return int(examples_per_class * n_classes / n_batches)
     else:
         return getattr(args.experiment, f'batchsize_{train_or_test}')
@@ -144,7 +145,7 @@ def get_n_batches(args, dataset, batchsize, train_or_test=None):
                 ds_size = examples_per_class * n_classes
         elif classes_subset is None:
             ds_size = sum([dataset['examples_per_class'][cl] for cl in dataset if isinstance(cl, int)]) if \
-                isinstance(dataset, dict) else dataset.shape[0]
+                isinstance(dataset, dict) else dataset.n_elem
         else:
             ds_size = sum([dataset['examples_per_class'][cl] for cl in classes_subset])
         return int(np.ceil(ds_size / batchsize))

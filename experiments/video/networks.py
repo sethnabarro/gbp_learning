@@ -1,20 +1,18 @@
 # coding=utf-8
 from core.utils.utils import dotdict as dd
 
+conv_tpose_single_layer_perpixel_4 = [dd(name='conv1', type='conv', n_filters=4, factors=dd(recon=dd(tpose=True, nonlin='none')))]
+conv_tpose_five_layer_upsample_perpixel_4 = \
+    [dd(name='conv1', type='conv', n_filters=4, factors=dd(recon=dd(tpose=True, nonlin='none'))),
+     dd(name='ups1', type='upsample'),
+     dd(name='conv2', type='conv', n_filters=8, factors=dd(recon=dd(N_rob=None, tpose=True, nonlin='leaky_relu'))),
+     dd(name='ups2', type='upsample'),
+     dd(name='conv3', type='conv', n_filters=8, factors=dd(recon=dd(N_rob=None, tpose=True, nonlin='leaky_relu')))]
 
-convnet = [dd(name='conv1', type='conv', n_filters=8),
-           dd(name='avg_pool2', type='avg_pool'),
-           dd(name='conv3', type='conv', n_filters=16, factors=dd(recon=dd(sigma=0.3)))]
-convnet_single_layer = [dd(name='conv1', type='conv', n_filters=8)]
-convnet_single_layer_16 = [dd(name='conv1', type='conv', n_filters=16)]
-convnet_single_layer_12 = [dd(name='conv1', type='conv', n_filters=12)]
 
-
-architectures = {'convnet': convnet,
-                 'convnet_single_layer': convnet_single_layer,
-                 'convnet_single_layer_16': convnet_single_layer_16,
-                 'convnet_single_layer_12': convnet_single_layer_12,
-                 }
+architectures = {'conv_tpose_single_layer_4': conv_tpose_single_layer_perpixel_4,
+                 'conv_tpose_five_layer_upsample_4': conv_tpose_five_layer_upsample_perpixel_4,
+                 'pairwise': [dd(name='pwise', type='conv', n_filters=0)]}
 
 
 def get_network(net_name, conv_sigmas=None, dense_coeff_prior_sigma=None, dense_weight_prior_sigma=None,
