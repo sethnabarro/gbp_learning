@@ -44,71 +44,18 @@ def get_data(validation=True, tr_size=None, shuffle_seed=3338):
     return ds_train, ds_test, ds_info
 
 
-def get_fresh_model(arch_name, activation, l2_coeff, pool_type):
-    if arch_name == 'mlp':
-        model = tf.keras.models.Sequential([
-            tf.keras.layers.Flatten(input_shape=(28, 28)),
-            tf.keras.layers.Dense(256, activation=activation),
-            tf.keras.layers.Dense(256, activation=activation),
-            tf.keras.layers.Dense(10)
-        ])
-    elif arch_name == 'wide_mlp':
-        model = tf.keras.models.Sequential([
-            tf.keras.layers.Flatten(input_shape=(28, 28)),
-            tf.keras.layers.Dense(400, activation=activation),
-            tf.keras.layers.Dense(400, activation=activation),
-            tf.keras.layers.Dense(10)
-        ])
-    elif arch_name == 'smaller_mlp':
-        model = tf.keras.models.Sequential([
-            tf.keras.layers.Flatten(input_shape=(28, 28)),
-            tf.keras.layers.Dense(256, activation=activation),
-            tf.keras.layers.Dense(10)
-        ])
-    elif arch_name == 'bigger_mlp':
-        model = tf.keras.models.Sequential([
-            tf.keras.layers.Flatten(input_shape=(28, 28)),
-            tf.keras.layers.Dense(256, activation=activation),
-            tf.keras.layers.Dense(256, activation=activation),
-            tf.keras.layers.Dense(256, activation=activation),
-            tf.keras.layers.Dense(10)
-        ])
-    elif arch_name == 'cnn':
-        model = tf.keras.models.Sequential([
-            tf.keras.layers.Conv2D(8, kernel_size=5, activation=activation, kernel_regularizer=L2Reg(l2=l2_coeff)),
-            {'max': tf.keras.layers.MaxPool2D(2), 'avg': tf.keras.layers.AvgPool2D(2)}[pool_type],
-            tf.keras.layers.Conv2D(16, kernel_size=3, activation=activation, kernel_regularizer=L2Reg(l2=l2_coeff)),
-            {'max': tf.keras.layers.MaxPool2D(2), 'avg': tf.keras.layers.AvgPool2D(2)}[pool_type],
-            tf.keras.layers.Conv2D(32, kernel_size=3, activation=activation, kernel_regularizer=L2Reg(l2=l2_coeff)),
-            # tf.keras.layers.MaxPool2D(2),
-            tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(10, kernel_regularizer=L2Reg(l2=l2_coeff))
-        ])
-    elif arch_name == 'single_conv_dense_k5':
-        model = tf.keras.models.Sequential([
-            tf.keras.layers.Conv2D(8, kernel_size=5, activation=activation, kernel_regularizer=L2Reg(l2=l2_coeff)),
-            tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(10, kernel_regularizer=L2Reg(l2=l2_coeff))
-        ])
-    elif arch_name == 'conv_pool_dense_k5':
-        model = tf.keras.models.Sequential([
-            tf.keras.layers.Conv2D(8, kernel_size=5, activation=activation, kernel_regularizer=L2Reg(l2=l2_coeff)),
-            {'max': tf.keras.layers.MaxPool2D(2), 'avg': tf.keras.layers.AvgPool2D(2)}[pool_type],
-            tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(10, kernel_regularizer=L2Reg(l2=l2_coeff))
-        ])
-
-    elif arch_name == 'linear':
-        model = tf.keras.models.Sequential([
-            tf.keras.layers.Flatten(input_shape=(28, 28)),
-            tf.keras.layers.Dense(10, kernel_regularizer=L2Reg(l2=l2_coeff))
-        ])
+def get_model(l2_coeff):
+    model = tf.keras.models.Sequential([
+        tf.keras.layers.Flatten(input_shape=(28, 28)),
+        tf.keras.layers.Dense(10, kernel_regularizer=L2Reg(l2=l2_coeff))
+    ])
 
     model.build(input_shape=(None, 28, 28, 1))
     return model
 
 
 def get_optim(name, lr):
+    assert name in ('adam', 'sgd')
     if name == 'adam':
         opt = tf.keras.optimizers.Adam(lr)
     elif name == 'sgd':
