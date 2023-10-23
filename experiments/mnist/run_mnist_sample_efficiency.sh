@@ -60,43 +60,7 @@ do
     --weight-seed=${seed1}
     --coeff-seed=${seed2}
     --data-seed=${seed3}"
-#    --factors-coeff-prior-sigma-layers 0.2 0.2 0.2
-#    --factors-coeff-prior-N-rob-layers 0.5 0.5 0.5
-#    --weight-seed=${seed1}
-#    --coeff-seed=${seed2}
-#    --data-seed=${seed3}"
-#    --tf-deterministic
-#--plot-every-batch
-#    --test-on-train-set
-#     --precision-rescaling-conv-only
-#     --factors-coeff-prior-N-rob-layers 0.1 0.1 10.
-#    --factors-coeff-prior-sigma-layers 0.2 0.2 1.
-#    --factors-recon-sigma-layers 0.1 0.1 0.1
-#    --factors-coeff-prior-sigma=1.
-#    --factors-weight-prior-sigma=1.
-#    --factors-dense-weight-prior-sigma=4.
-#    --factors-dense-coeff-prior-sigma=1.
-#    --factors-softmax-obs-sigma=0.05
-#    --factors-pixel-obs-sigma=0.005
-#    --factors-recon-sigma-layers 0.1
-#    --factors-softmax-obs-sigma=0.0001
-#    --factors-dense-sigma=0.05
-#    --not-static-graph
-#    --random-layer-schedule
-#    --plot-weights
-#    --plot-coeffs
-#    --plot-convergence
-#    --plot-every-batch
-#    --factors-softmax-obs-sigma=0.1
-#    --factors-dense-sigma=0.2
-#    --factors-recon-sigma=0.8
-#    --factors-pixel-obs-sigma=0.1
-#    --factors-avg-pool-sigma=0.1
-
-#  if [ "$rep" -eq "1" ]; then
-#    # On the first run make plots of diagnostics
-#    cmd="${cmd} --plot-weights --plot-convergence --plot-coeffs"
-#  fi
+#  cmd="${cmd} --n-validation-data=9000 --validation"
 
   printf "PID of this script: %s\n" "$$"
   printf "Repeat %s of %s" "$rep" "$N_REPEATS"

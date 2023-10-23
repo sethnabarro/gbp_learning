@@ -17,7 +17,7 @@ cmd="PYTHONPATH=${PYTHONPATH}:$repo_dir:$repo_dir/experiments/xor/ $python_exec 
   --batchsize-train=4
   --batchsize-test=400
   --inference='gbp'
-  --n-iters-per-train-batch=1200
+  --n-iters-per-train-batch=600
   --n-iters-per-test-batch=300
   --n-train-eval-breaks=1
   --n-test-batches=1
@@ -31,8 +31,8 @@ cmd="PYTHONPATH=${PYTHONPATH}:$repo_dir:$repo_dir/experiments/xor/ $python_exec 
   --factors-last-coeff-prior-sigma=2.
   --factors-softmax-obs-sigma=0.1
   --factors-dense-sigma=0.1
-  --momentum=0.5
-  --dropout=0.8
+  --momentum=0.8
+  --dropout=0.5
   --architecture='two_layer_mlp_8'
   --logdir=${logdir}
   --coeff-init-std=0.1

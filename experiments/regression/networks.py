@@ -3,11 +3,20 @@ from core.utils.utils import dotdict as dd
 
 two_layer_mlp_16 = [
                     dd(name='input_obs1', type='input_obs'),
-                    dd(name='dense1', type='dense', outdim=16, factors=dd(dense=dd(nonlin='leaky_relu', noiseless_input=True))),
+                    dd(name='dense1', type='dense', outdim=16, factors=dd(dense=dd(nonlin='leaky_relu'))),
                     dd(name='dense2', type='dense', outdim=1, factors=dd(dense=dd(nonlin='none'))),
                     dd(name='output_obs1', type='regression_obs'),]
 
-architectures = {'two_layer_mlp_16': two_layer_mlp_16}
+two_layer_mlp_12 = [
+                    dd(name='input_obs1', type='input_obs'),
+                    dd(name='dense1', type='dense', outdim=12, factors=dd(dense=dd(nonlin='leaky_relu'))),
+                    dd(name='dense2', type='dense', outdim=1, factors=dd(dense=dd(nonlin='none'))),
+                    dd(name='output_obs1', type='regression_obs'),]
+
+architectures = {
+    'two_layer_mlp_16': two_layer_mlp_16,
+    'two_layer_mlp_12': two_layer_mlp_12,
+}
 
 
 def get_network(net_name, conv_sigmas=None, last_coeff_prior_sigma=None, last_weight_prior_sigma=None, dense_coeff_prior_sigmas=None, dense_coeff_prior_N_robs=None):

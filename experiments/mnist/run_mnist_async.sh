@@ -40,7 +40,6 @@ do
     --factors-recon-sigma-layers 0.02
     --factors-avg-pool-sigma=0.02
     --factors-pixel-obs-sigma=0.03
-    --factors-recon-N-rob=500000.
     --factors-dense-weight-prior-sigma=0.3
     --factors-dense-coeff-prior-sigma=2.
     --factors-weight-prior-sigma=0.04

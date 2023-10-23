@@ -63,7 +63,7 @@ def get_config():
                   )
     recon_factor_args = dd(additive_factor=True,
                            sigma=cmd_args.factors_recon_sigma,
-                           N_rob=4.,
+                           N_rob=None,
                            rob_type='tukey',
                            sum_filters=True,
                            kmult=1.,
@@ -79,7 +79,7 @@ def get_config():
                            stride=1,
                            fac_to_var_chunksize=8)
     pixel_obs_factor = dd(sigma=cmd_args.factors_pixel_obs_sigma,
-                          N_rob=10.,
+                          N_rob=None,
                           rob_type='tukey',
                           kmult=1.,
                           relin_freq=cmd_args.relin_freq)

@@ -56,7 +56,7 @@ def plot_regression(model,
     ystd = output_vars.sigma
     plt.rc('font', family='serif', size=15)
     f = plt.gcf()
-    f.set_size_inches((4., 3))
+    f.set_size_inches((6., 4.))
 
     # for j in range(ymu.shape[1]):
     l, = plt.plot(ins[:, 0, 0, 0], ymu[:, 0])
