@@ -2,6 +2,7 @@
 import numpy as np
 import os
 import tensorflow_datasets as tfds
+import tensorflow as tf
 
 from core.utils.data import ReinitDataIterator
 
@@ -33,6 +34,16 @@ def save_data_to_local(local_dir=None):
         np.save(os.path.join(local_dir, f'test{cl}.npy'), test[cl])
 
 
+def get_ds_mean_std(ds_by_class):
+    all_ds = []
+    for cl in ds_by_class:
+        all_ds.append(ds_by_class[cl])
+    all_ds = np.concatenate(all_ds, axis=0)
+    mean_ds = tf.reduce_mean(all_ds, axis=[0, 1, 2]).numpy()
+    std_ds = tf.math.reduce_std(all_ds, axis=[0, 1, 2]).numpy()
+    return mean_ds, std_ds
+
+
 def load_data(datadir=None,
               shuffle=True,
               shuffle_seed=None,
@@ -42,10 +53,16 @@ def load_data(datadir=None,
               examples_per_class_train=None,
               examples_per_class_test=None,
               validation=False,
-              n_validation=None):
+              n_validation=None,
+              data_subsample_seed=None,
+              dataset=None):
     assert not ((shuffle_seed is not None) and not shuffle), \
         "`shuffle_seed` specified, but `shuffle=False`"
-    relpath = datadir or '../../inputs/mnist/'
+    dataset = dataset or 'mnist'
+    dataset_to_dirname = {'fashion_mnist': 'fmnist',
+                          'mnist': 'mnist',
+                          'cifar10': 'cifar10'}
+    relpath = datadir or f'../../inputs/{dataset_to_dirname[dataset]}/'
     repodir = os.path.dirname(os.path.abspath(__file__))
     datadir = os.path.join(repodir, relpath)
     train_by_class = {}
@@ -57,9 +74,8 @@ def load_data(datadir=None,
         assert n_validation % n_classes == 0
         n_val_per_class = n_validation // n_classes
     for cl in range(n_classes):
-        train_by_class[cl] = np.load(os.path.join(datadir, f'mnist_train{cl}.npy')).astype(np.float32)
-        # train_by_class[cl] = train_by_class[cl][:(20 + cl)]
-        # print('Traub suze', cl, train_by_class[cl].shape)
+        train_fname_cl = f'mnist_train{cl}.npy' if dataset == 'mnist' else f'train{cl}.npy'
+        train_by_class[cl] = np.load(os.path.join(datadir, train_fname_cl)).astype(np.float32)
         if validation:
             # Split train into train and validation (allocated to test_by_class)
             train_by_class[cl], test_by_class[cl] = \
@@ -68,26 +84,24 @@ def load_data(datadir=None,
                   f'Num. train examples {train_by_class[cl].shape[0]}, '
                   f'Num. val examples {test_by_class[cl].shape[0]}')
         else:
-            test_by_class[cl] = np.load(os.path.join(datadir, f'mnist_test{cl}.npy')).astype(np.float32)
+            test_fname_cl = f'mnist_test{cl}.npy' if dataset == 'mnist' else f'test{cl}.npy'
+            test_by_class[cl] = np.load(os.path.join(datadir, test_fname_cl)).astype(np.float32)
 
     if (isinstance(rescale, bool) and rescale) or rescale == 'zero_one':
         for cl in train_by_class:
             train_by_class[cl] /= 255.
             test_by_class[cl] /= 255.
+
     elif rescale == 'mean_std':
-        all_tr = []
-        for cl in train_by_class:
-            all_tr.append(train_by_class[cl])
-        all_tr = np.concatenate(all_tr, axis=0)
-        mean_tr, std_tr = np.mean(all_tr), np.std(all_tr)
+        mean_tr, std_tr = get_ds_mean_std(train_by_class)
         for cl in train_by_class:
             train_by_class[cl] = (train_by_class[cl] - mean_tr) / std_tr
             test_by_class[cl] = (test_by_class[cl] - mean_tr) / std_tr
 
-    if shuffle:
-        if shuffle_seed is not None:
-            print('Data shuffle seed', shuffle_seed)
-            np.random.seed(shuffle_seed)
+    if examples_per_class_train or examples_per_class_test:
+        # Shuffle for data subsampling
+        data_subsample_seed = data_subsample_seed or 0
+        np.random.seed(data_subsample_seed)
         for cl in range(n_classes):
             np.random.shuffle(train_by_class[cl])
             np.random.shuffle(test_by_class[cl])
@@ -101,6 +115,15 @@ def load_data(datadir=None,
     if examples_per_class_test is not None:
         examples_per_class_test = int(examples_per_class_test)
         test_by_class = {cl: te[:examples_per_class_test] for cl, te in test_by_class.items()}
+
+    if shuffle:
+        # Shuffle for batch ordering
+        if shuffle_seed is not None:
+            print('Data shuffle seed', shuffle_seed)
+            np.random.seed(shuffle_seed)
+        for cl in range(n_classes):
+            np.random.shuffle(train_by_class[cl])
+            np.random.shuffle(test_by_class[cl])
 
     # Make into generators
     train_by_class['examples_per_class'] = {}

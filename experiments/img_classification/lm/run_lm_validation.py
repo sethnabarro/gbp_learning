@@ -5,7 +5,7 @@ import os
 import shutil
 import tensorflow as tf
 
-from experiments.mnist.lm.utils import get_optim, get_data, get_model
+from experiments.img_classification.lm.utils import get_optim, get_data, get_model
 
 
 def main(tr_size, epochs, lr, l2coeff, seed=872):

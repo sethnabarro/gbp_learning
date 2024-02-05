@@ -2,7 +2,7 @@
 import json
 import os
 
-from experiments.mnist.networks import architectures, get_network
+from experiments.img_classification.networks import architectures, get_network
 from core.utils.utils import dotdict as dd
 from core.utils.argparsing import get_argparser
 
@@ -14,15 +14,16 @@ def parse_command_line_args():
                        inc_plotting=True,
                        inc_validation=True)
 
+    ap.add_argument('--dataset', choices=('cifar10', 'mnist', 'fashion_mnist'), default='mnist')
     ap.add_argument('--fix-params-for-testing', action='store_true')    # Filtering (between train and test)
     ap.add_argument('--corrupt-test-inputs', type=str)             # Whether and how to add noise to test images
     ap.add_argument('--input-rescale', type=str, choices=('zero_one', 'mean_std'))  # How to rescale images
     ap.add_argument('--test-on-train-set', action='store_true')    # Check ability to overfit
     ap.add_argument('--remaining-tasks-train', type=eval)
-    ap.add_argument('--mnist-experiment-type',
-                    default='standard_mnist',
+    ap.add_argument('--experiment-type',
+                    default='standard',
                     type=str,
-                    choices=('standard_mnist',))
+                    choices=('standard',))
     ap.add_argument('--inference-test', type=str, choices=('gd', 'gbp'))
 
     # If below arg given then each batch will have same class proportions
@@ -147,7 +148,8 @@ def get_config():
                           dense_weight_prior_sigma=cmd_args.factors_dense_weight_prior_sigma)
     config = dd(inference=cmd_args.inference,
                 inference_test=cmd_args.inference_test,  # May be None
-                exp_type=cmd_args.mnist_experiment_type,
+                dataset=cmd_args.dataset,
+                exp_type=cmd_args.experiment_type,
                 tf_deterministic=cmd_args.tf_deterministic,
                 architecture=netconf,
                 layer_schedule=cmd_args.layer_schedule,

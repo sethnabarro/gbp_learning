@@ -26,17 +26,19 @@ cmd="PYTHONPATH=${PYTHONPATH}:$repo_dir:$repo_dir/experiments/xor/ $python_exec 
   --plot-train-batch-freq=1
   --plot-test-batch-freq=1
   --factors-weight-prior-sigma=3.
-  --factors-dense-coeff-prior-sigma-layers 5. 2.
+  --fix-params-for-testing
+  --factors-dense-coeff-prior-sigma-layers 5. 5.
   --factors-last-weight-prior-sigma=3.
   --factors-last-coeff-prior-sigma=2.
+  --factors-bias-prior-sigma=1.
   --factors-softmax-obs-sigma=0.1
   --factors-dense-sigma=0.1
-  --momentum=0.8
-  --dropout=0.5
+  --momentum=0.7
+  --dropout=0.
   --architecture='two_layer_mlp_8'
   --logdir=${logdir}
   --coeff-init-std=0.1
-  --weight-init-std=1.
+  --weight-init-std=0.1
   --weight-seed=${seed1}
   --coeff-seed=${seed2}
   "

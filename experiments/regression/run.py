@@ -90,7 +90,8 @@ def main():
         sys.stderr = open(os.path.join(args.experiment.results_dir, f'err.txt'), 'w', buffering=1)
         with open(os.path.join(args.experiment.results_dir, f'out.txt'), 'w', buffering=1) as fo:
             with redirect_stdout(fo):
-                train_data, test_data = load_data(n_te_points=args.experiment.batchsize_test, seed=args.experiment.dataset_shuffle_seed)
+                train_data, test_data = load_data(n_te_points=args.experiment.batchsize_test,
+                                                  seed=args.experiment.dataset_shuffle_seed)
                 plot_regression_partial = partial(plot_regression,
                                                   xtr=[a[0] for a in train_data.arr],
                                                   ytr=[a[1] for a in train_data.arr])

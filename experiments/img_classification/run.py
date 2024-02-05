@@ -9,8 +9,8 @@ import tensorflow as tf
 
 from core.utils.utils import set_allow_gpu_mem_growth, dotdict
 
-from experiments.mnist.config import get_config
-from experiments.mnist.data import load_data
+from experiments.img_classification.config import get_config
+from experiments.img_classification.data import load_data
 from core.utils.saveload import load_checkpoint
 from experiments.utils.classification import test_classification
 from experiments.utils.utils import create_results_dir
@@ -119,7 +119,8 @@ def main():
                               n_validation=config_temp.experiment.n_validation_data,
                               examples_per_class_train=config_temp.experiment.examples_per_class_train,
                               examples_per_class_test=config_temp.experiment.examples_per_class_test,
-                              rescale=config_temp.experiment.input_rescale if config_temp.experiment.input_rescale is not None else True)
+                              rescale=config_temp.experiment.input_rescale if config_temp.experiment.input_rescale is not None else True,
+                              dataset=config_temp.dataset)
 
                 if load_from_cp:
                     model_in, model_spec = \

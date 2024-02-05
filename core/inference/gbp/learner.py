@@ -330,7 +330,7 @@ def filtering_on_weights(gbplearner_prev: [GBPLearner, list, tuple],
             lay_new.update_weight_marginals()
 
             # Relinearise recon factors around new weight values
-            # lay_new.relinearise_factor_weights(lay_new.weight_vars.mu)
+            lay_new.relinearise_factor_weights(lay_new.weight_vars.mu)
 
 
 def filtering_on_biases(gbplearner_prev: [GBPLearner, list, tuple],
