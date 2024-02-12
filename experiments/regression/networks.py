@@ -3,14 +3,14 @@ from core.utils.utils import dotdict as dd
 
 two_layer_mlp_16 = [
                     dd(name='input_obs1', type='input_obs'),
-                    dd(name='dense1', type='dense', outdim=16, factors=dd(dense=dd(nonlin='leaky_relu'))),
-                    dd(name='dense2', type='dense', outdim=1, factors=dd(dense=dd(nonlin='none'))),
+                    dd(name='dense1', type='dense', outdim=16, factors=dd(dense=dd(sigma=5e-3, nonlin='sigmoid'))),
+                    dd(name='dense2', type='dense', outdim=1, factors=dd(dense=dd(sigma=1e-2, nonlin='none'))),
                     dd(name='output_obs1', type='regression_obs'),]
 
 two_layer_mlp_12 = [
                     dd(name='input_obs1', type='input_obs'),
-                    dd(name='dense1', type='dense', outdim=12, factors=dd(dense=dd(nonlin='leaky_relu'))),
-                    dd(name='dense2', type='dense', outdim=1, factors=dd(dense=dd(nonlin='none'))),
+                    dd(name='dense1', type='dense', outdim=12, factors=dd(dense=dd(sigma=5e-3, nonlin='sigmoid'))),
+                    dd(name='dense2', type='dense', outdim=1, factors=dd(dense=dd(sigma=1e-2, nonlin='none'))),
                     dd(name='output_obs1', type='regression_obs'),]
 
 architectures = {

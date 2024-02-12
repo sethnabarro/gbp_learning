@@ -38,7 +38,6 @@ do
     --input-rescale='mean_std'
     --not-class-balanced-batches-train
     --factors-softmax-obs-sigma=0.01
-    --factors-softmax-obs-sigma-mult=1.
     --factors-dense-sigma=0.01
     --factors-recon-sigma-layers 0.01
     --factors-avg-pool-sigma=0.01

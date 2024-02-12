@@ -11,7 +11,7 @@ source "$(dirname ${scriptdir})/utils/bash_utils.sh"   # Includes functions call
 python_exec="${ENV_DIR}/bin/python"
 repo_dir="$(get_repo_dir)"
 gpus="$(get_gpu_ids $N_GPUS)"
-n_tr_data=200   # 50, 100, 200, 400, 800, 3200, 12800 or 60000
+n_tr_data=60000   # 50, 100, 200, 400, 800, 3200, 12800 or 60000
 
 for rep in $(seq $N_REPEATS)
 do
@@ -37,7 +37,6 @@ do
     --input-rescale='zero_one'
     --not-class-balanced-batches-train
     --factors-softmax-obs-sigma=0.01
-    --factors-softmax-obs-sigma-mult=1.
     --factors-dense-sigma=0.01
     --factors-recon-sigma-layers 0.01
     --factors-avg-pool-sigma=0.01

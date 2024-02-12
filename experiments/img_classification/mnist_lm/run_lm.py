@@ -5,19 +5,15 @@ import os
 import shutil
 import tensorflow as tf
 
-from experiments.img_classification.lm.utils import get_optim, get_data, get_model
+from experiments.img_classification.mnist_lm.utils import get_optim, get_data, get_model
 
 
 def main(tr_size, epochs, lr, l2coeff, seed=872):
     SEED = seed
     EPOCHS = epochs
     REPEATS = 1
-    VALIDATION = True
-    RESULTS_BASE_DIR = 'results/'
-    if VALIDATION:
-        RESULTS_BASE_DIR += 'validation/'
-    else:
-        RESULTS_BASE_DIR += 'test/'
+    VALIDATION = False
+    RESULTS_BASE_DIR = 'results_lm/test/'
     REINIT_OPTIM = False
     OPTIM = 'adam'
     LR = lr
@@ -72,7 +68,7 @@ def main(tr_size, epochs, lr, l2coeff, seed=872):
 
         return model_to_tr
 
-    results = np.empty(shape=(0, 4))
+    results = np.empty(shape=(0, 3))
     for rep in range(REPEATS):
         print(f'Repeat {rep + 1} of {REPEATS}')
         model = get_model(l2_coeff=L2_COEFF)
@@ -106,28 +102,8 @@ def main(tr_size, epochs, lr, l2coeff, seed=872):
 
 
 if __name__ == '__main__':
-    train_sizes = [50, 100, 200, 400, 800, 3200, 12800, None]
-    for train_size in train_sizes:
-        acc_best = 0.
-        if os.path.exists(f'results_lin/validation/{train_size}'):
-            if os.path.exists(f'results_lin/validation/{train_size}/best_config.txt'):
-                with open(f'results_lin/validation/{train_size}/best_config.txt', 'r') as resfile:
-                    acc_best = float(resfile.read().split('New best acc: ')[-1])
-        else:
-            os.mkdir(f'results_lin/validation/{train_size}')
-        for l2 in [0., 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 1.]:
-            for l_r in [1e-4, 1e-3, 3e-3, 1e-2, 3e-2]:
-                for ep in [5, 10, 20, 40, 80, 120]:
-                    acc_conf = main(tr_size=None,
-                                    l2coeff=l2,
-                                    lr=l_r,
-                                    epochs=ep,
-                                    seed=944)
-                    if acc_conf > acc_best:
-                        print(f'Best conf so far for train size {train_size}:'
-                              f'\n\tL2: {l2}\n\tLR: {l_r}\n\tEpochs: {ep}.\nNew best acc: {acc_conf}')
-                        acc_best = acc_conf
-                        with open(f'results_lin/validation/{train_size}/best_config.txt', 'a') as best_conf_file:
-                            best_conf_file.write(f'\n\nBest conf so far for train size {train_size}:'
-                                                 f'\n\tL2: {l2}\n\tLR: {l_r}\n\tEpochs: {ep}.\n'
-                                                 f'New best acc: {acc_conf}')
+    main(tr_size=None,   # None means full training set
+         l2coeff=0.,
+         lr=0.003,
+         epochs=50,
+         seed=np.random.randint(low=0, high=np.iinfo(np.int32).max))

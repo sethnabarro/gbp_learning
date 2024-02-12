@@ -5,7 +5,7 @@ import shutil
 import tensorflow as tf
 import time
 
-from experiments.img_classification.nn.utils import get_optim, get_data, get_fresh_model, FIFOBuffer
+from experiments.img_classification.mnist_cnn.utils import get_optim, get_data, get_fresh_model, FIFOBuffer
 
 gpus = tf.config.list_physical_devices('GPU')
 if gpus:
@@ -13,7 +13,7 @@ if gpus:
     for gpu in gpus:
         tf.config.experimental.set_memory_growth(gpu, True)
 
-MASTER_RESDIR = 'results_w_replay_recent_trfrac_fix_rpb_bug'
+MASTER_RESDIR = 'results_w_replay'
 BATCH_SIZE = 50
 
 def main(tr_size, arch, epochs, lr, lr_replay,
@@ -162,7 +162,7 @@ def main(tr_size, arch, epochs, lr, lr_replay,
 
 
 if __name__ == '__main__':
-    validation = False
+    validation = True
     nonval_frac = 0.85
     train_sizes = [50,
                    100,
@@ -171,12 +171,13 @@ if __name__ == '__main__':
                    800,
                    3200,
                    12800,
-                   int(60000 * nonval_frac) if validation else 60000][::-1]
+                   int(60000 * nonval_frac) if validation else 60000]
     buffer_size_fracs = [0.003, 0.01, 0.03, 0.06, 0.1]
 
     for train_size in train_sizes:
         for buff_size_frac in buffer_size_fracs:
             if buff_size_frac * train_size < 1. and buff_size_frac > 0.:
+                # Avoid search over buffer hyperparams if buffer size is 0
                 continue
             buff_size = int(np.ceil(buff_size_frac * train_size))
 
@@ -188,7 +189,6 @@ if __name__ == '__main__':
                         acc_best = float(resfile.read().split('New best acc: ')[-1].split('\n')[0])
             else:
                 os.mkdir(f'{MASTER_RESDIR}/{val_or_test}/{train_size}tr_{buff_size}buff')
-            # for l2 in [0., 1e-3]:
 
             for n_out_steps in [1, 3, 10, 30]:
                 for buff_upd_frac in [0., 0.03, 0.1, 0.3, 0.5]:

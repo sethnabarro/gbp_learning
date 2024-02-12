@@ -33,7 +33,6 @@ cmd="PYTHONPATH=${PYTHONPATH}:$repo_dir:$repo_dir/experiments/regression/ $pytho
     --factors-last-weight-prior-sigma=1.5
     --factors-last-coeff-prior-sigma=3.
     --factors-bias-prior-sigma=3.
-    --factors-dense-sigma=0.1
     --momentum=0.7
     --dropout=0.5
     --architecture='two_layer_mlp_16'
