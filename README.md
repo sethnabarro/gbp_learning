@@ -1,5 +1,5 @@
 # gbp-learning-anon
-Code accompanying the paper
+Code accompanying GBP Learning paper:
 > *Learning in Deep Factor Graphs with Gaussian Belief Propagation*
 
 ## Dependencies
@@ -25,10 +25,18 @@ Run scripts
 
 ### Figure 4
 Run scripts 
-- `experiments/mnist/lm/run_lm.py`
-  - Set variables `l2coeff`, `lr`, `epochs` as per the Appendix.
-- `experiments/mnist/run_mnist_sample_efficiency.sh`
+- For linear classifier baseline: `experiments/img_classification/mnist_lm/run_lm.py`
+  - Hyperparameter tuning: `experiments/img_classification/mnist_lm/run_lm_validation.py`
+- For CNN baseline: `experiments/img_classification/mnist_cnn/run_nn_replay.py`
+  - Set variable `validation=True` during hyperparameter tuning.
+- For GBP Learning: `experiments/img_classification/run_mnist_sample_efficiency.sh`
   - Run for each training set size by setting the `n_tr_data` variable
 
 ### Layerwise Asynchronous Training
-- Run `experiments/mnist/run_mnist_synch.sh` and `experiments/mnist/run_mnist_asynch.sh`
+- Run `experiments/img_classification/run_mnist_asynch.sh`.
+  - Compare to results of `experiments/img_classification/run_mnist_sample_efficiency.sh` with `n_tr_data=60000` (full training set) as this is with synchronous forward/backward sweeps by default.
+
+### Compare with Lucibello et al., 2022
+- For MNIST, use results of `experiments/img_classification/run_mnist_sample_efficiency.sh` with `n_tr_data=60000` (full training set)
+- For FashionMNIST: `experiments/img_classification/run_fmnist.sh`
+- For CIFAR10: `experiments/img_classification/run_cifar10.sh`
