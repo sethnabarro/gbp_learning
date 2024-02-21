@@ -7,22 +7,34 @@ import tensorflow as tf
 from core.utils.data import ReinitDataIterator
 
 
-def save_data_to_local(local_dir=None):
+def save_data_to_local(local_dir=None, fashion=False, cifar=False):
+    assert not (fashion and cifar)
     # Where to save data to
-    local_dir = local_dir or '../inputs/mnist/'
+    if fashion:
+        ds_name = 'fashion_mnist'
+        default_dir = '../../inputs/fmnist/'
+    elif cifar:
+        ds_name = 'cifar10'
+        default_dir = '../../inputs/cifar10/'
+    else:
+        ds_name = 'mnist'
+        default_dir = '../../inputs/mnist/'
+    local_dir = local_dir or default_dir
 
     # Load MNIST
     mnist_train, mnist_test = tfds.load(
-        'mnist',
+        name=ds_name,
         split=['train', 'test'],
         shuffle_files=True,
         as_supervised=True,
         with_info=True
     )[0]
 
+    imshp = (32, 32, 3) if cifar else (28, 28, 1)
+
     def _convert_tfds_to_array_dict(ds):
         ds_iter = ds.as_numpy_iterator()
-        ds_by_class = {x: np.array([]).reshape((0, 28, 28, 1)) for x in range(10)}
+        ds_by_class = {x: np.array([]).reshape((0,) + imshp) for x in range(10)}
         for x, y in ds_iter:
             ds_by_class[y] = np.concatenate([x[None], ds_by_class[y]], axis=0)
         return ds_by_class
