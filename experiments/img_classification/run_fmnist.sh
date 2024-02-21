@@ -26,7 +26,6 @@ do
     --batchsize-test=200
     --n-iters-per-train-batch=500
     --n-iters-per-test-batch=300
-    --n-epochs=1
     --n-train-eval-breaks=5
     --n-test-eval-breaks=1
     --fix-params-for-testing
