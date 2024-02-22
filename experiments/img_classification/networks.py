@@ -4,7 +4,7 @@ from core.utils.utils import dotdict as dd
 
 n_classes = 10
 three_layer_k5_ff_fixed_in_16 = \
-    [dd(name='conv1', type='conv', n_filters=8, factors=dd(recon=dd(sigma=0.02, ksize=5, feedforward=True))),
+    [dd(name='conv1', type='conv', n_filters=16, factors=dd(recon=dd(sigma=0.02, ksize=5, feedforward=True, fixed_inputs=True))),
      dd(name='max_pool2', type='max_pool'),
      dd(name='dense1', type='dense', outdim=n_classes),
      dd(name='softmax1', type='softmax_class_obs')]
