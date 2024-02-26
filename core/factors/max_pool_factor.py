@@ -74,16 +74,16 @@ class MaxPoolFactor(NonLinearFactor, AvgPoolFactor):
 
         # Do marginalisation to get outgoing messages
         fac_to_var_eta, fac_to_var_Lambda = \
-            self.marginalise_sherman_morrison(mess_eta=var_msg_in_eta,
-                                              factor_eta=factor_eta,
-                                              mess_Lambda=var_msg_in_Lambda,
-                                              J_div_sigma=factor_J / self.sigma)
+            self.marginalise_sherman_morrison(mess_eta=tf.cast(var_msg_in_eta, tf.float64),
+                                              factor_eta=tf.cast(factor_eta, tf.float64),
+                                              mess_Lambda=tf.cast(var_msg_in_Lambda, tf.float64),
+                                              J_div_sigma=tf.cast(factor_J / self.sigma, tf.float64))
 
         # Update outgoing message state
-        self.input_var_edges.fac_to_var_eta = fac_to_var_eta[..., :self.ksize ** 2]
-        self.input_var_edges.fac_to_var_Lambda = fac_to_var_Lambda[..., :self.ksize ** 2]
-        self.output_var_edges.fac_to_var_eta = fac_to_var_eta[..., -1]
-        self.output_var_edges.fac_to_var_Lambda = fac_to_var_Lambda[..., -1]
+        self.input_var_edges.fac_to_var_eta = tf.cast(fac_to_var_eta[..., :self.ksize ** 2], tf.float32)
+        self.input_var_edges.fac_to_var_Lambda = tf.cast(fac_to_var_Lambda[..., :self.ksize ** 2], tf.float32)
+        self.output_var_edges.fac_to_var_eta = tf.cast(fac_to_var_eta[..., -1], tf.float32)
+        self.output_var_edges.fac_to_var_Lambda = tf.cast(fac_to_var_Lambda[..., -1], tf.float32)
 
     def energy(self, conn_vars, robust=None, aggregate=True):
         inputs, coeffs = conn_vars
