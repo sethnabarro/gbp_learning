@@ -739,7 +739,7 @@ def init_dense_layer(config: dotdict,
                     nonlin_xscale=config.factors.dense.nonlin_xscale or 1.,
                     fac_to_var_chunksize=fac_to_var_chunksize,
                     decompose=decompose)
-    dense_factor.relinearise(0, init_lin_point)
+    # dense_factor.relinearise(0, init_lin_point)
 
     coeff_prior_factor = \
         NonLinearUnaryFactor(sigma=config.factors.coeff_prior.sigma,
