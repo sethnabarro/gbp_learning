@@ -1,5 +1,5 @@
-# gbp-learning-anon
-Code accompanying GBP Learning paper:
+# GBP Learning
+Code accompanying paper:
 > *Learning in Deep Factor Graphs with Gaussian Belief Propagation*
 
 ## Dependencies
