@@ -1,7 +1,9 @@
 # GBP Learning
 Code accompanying paper [*Learning in Deep Factor Graphs with Gaussian Belief Propagation*](https://arxiv.org/abs/2311.14649) from ICML 2024. Joint work with Mark van der Wilk and Andrew J Davison.
 
-<img src="figs/gbp_learning_overview_layercols.png" alt="drawing" width="200"/>
+<p align="center">
+  <img src="figs/gbp_learning_overview_layercols.png" alt="drawing" width="350"/>
+</p>
 
 ## Dependencies
 Install from the `requirements.txt` file.
